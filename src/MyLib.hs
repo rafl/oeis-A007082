@@ -10,6 +10,7 @@ import Debug.Trace
 import Control.Monad
 import Data.List (tails, sort)
 import qualified Data.Map as M
+import System.Environment
 
 findPrime :: Natural -> Int -> Prime Natural
 findPrime m np = go 1
@@ -70,7 +71,7 @@ compMat n m w xs = [ [ a j k xj xk
 
 e_n n p m w =
   (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map (f n m w) wss)
-  where wss = (++ [w^m]) . map (powSomeMod w) <$> replicateM (n-1) [0..m-1]
+  where wss = traceShowId $ (++ [w^m]) . map (powSomeMod w) <$> replicateM (n-1) [0..m-1]
 
 e_n' n p m w =
   (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map ((cache M.!) . sort) wss)
@@ -78,6 +79,38 @@ e_n' n p m w =
         cache = foldl' go M.empty wss
         go m ws | Just r <- M.lookup (sort ws) m = m
                 | otherwise = M.insert (sort ws) (f n m w ws) m
+
+
+
+
+-- createMss :: Integer -> [[Integer]]
+-- createMss targetSum = [ rs | sum [rs] = targetSum, all rs >= 0 ]
+
+createMss :: Int -> Int -> [[Int]]
+createMss 1 r = [[r]]
+createMss n 0 = [replicate n 0]
+createMss n r = [a : b | a <- [0..r], b <- (createMss (n-1) (r - a)) ]
+
+createWs :: SomeMod -> [Int] -> [SomeMod]
+createWs w ms = 
+	-- traceShowWith ("ws", ms, ) $
+	map (powSomeMod w) . concat . map (uncurry replicate) $ zip ms [0..] 
+
+compCoef :: [Int] -> Int
+compCoef ms = 
+	-- traceShowWith ("coef", ms, ) $
+	product [1..(sum ms)] `div` product (map (\m -> product [1..m]) ms)
+
+
+e_n'' n p m w =
+  (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map (\ms -> (fromIntegral (compCoef ms) `modulo` unPrime p) * f n m w ((createWs w ms) ++ [w^m])) (createMss (fromIntegral m) (n-1)))
+
+
+	--    * sum (map
+	--   	(map (compCoef(ms) * f n m w) wss where wss = (++ [w^m]) . map createWs w ms
+	-- where ms = createMss (n-1) (n-1))
+	--
+
 
 main'' :: IO ()
 main'' = do
@@ -97,19 +130,20 @@ main' = do
   let (Just p) = isPrime 271
   let m = 3
   let w = primitiveMthRoot m p
-  print (e_n' 3 p m w)
-  print (e_n' 5 p m w)
+  print (e_n'' 3 p m w)
+  -- print (e_n 7 p m w)
 
 main :: IO ()
 main = do
-  let n = 7
+  args <- map (read @Natural) <$> getArgs
+  let n = args !! 0
   let m = mFor n
   print m
-  let p = findPrime m 300
+  let p = findPrime m 30
   print p
   let w = primitiveMthRoot m p
   print w
-  print (e_n' (fromIntegral n) p m w)
+  print (e_n'' (fromIntegral n) p m w)
   
 
 
