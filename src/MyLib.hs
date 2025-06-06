@@ -8,7 +8,8 @@ import Numeric.Natural
 import Data.Mod
 import Debug.Trace
 import Control.Monad
-import Data.List (tails, sort)
+import Control.Monad.Par
+import Data.List (tails, sort, findIndex)
 import qualified Data.Map as M
 import System.Environment
 
@@ -41,8 +42,16 @@ f n m w xs = fstTrm * sndTrm
                          , let xj = xs !! j
                          , let xk = xs !! k ]
         sndTrm = compDropDet n m w xs
+		
+f' n m w xs = read . show $ fstTrm * sndTrm
+  where fstTrm = product [ (powSomeMod xj (-1)) * xk + xj * powSomeMod xk (-1)
+                         | (j:ks) <- tails [0..n-1]
+                         , k <- ks
+                         , let xj = xs !! j
+                         , let xk = xs !! k ]
+        sndTrm = compDropDet n m w xs
 
-compDropDet n m w xs = det . dropLast $ compMat n m w xs
+compDropDet n m w xs = det' . dropLast $ compMat n m w xs
   where dropLast = init . map init
 
 det [] = 1
@@ -52,6 +61,46 @@ det ass@(as:_) =
       | j <- [0..length ass-1]
       , let sign | even j = 1
                  | otherwise = -1 ]
+
+det' ass = go 0 ass 1
+  where
+    n = length ass
+    go i mat acc
+      | i == n    = acc
+      | otherwise =
+          case findIndex (\row -> row !! i /= 0) (drop i mat) of
+            Nothing -> 0
+            Just relJ ->
+              let j = i + relJ
+                  (mat', acc') = if j /= i
+                                 then (swapRows i j mat, (-acc))
+                                 else (mat, acc)
+                  pivot = (mat' !! i) !! i
+                  eliminateRow k m'
+                    | k >= n    = m'
+                    | otherwise =
+                        let rowK = m' !! k
+                            rowI = m' !! i
+                            factor = (rowK !! i) / pivot
+                            newRowK = zipWith (\a b -> a - factor * b) rowK rowI
+                            m'' = replaceRow k newRowK m'
+                        in eliminateRow (k + 1) m''
+
+                  mat'' = eliminateRow (i + 1) mat'
+              in go (i + 1) mat'' (acc' * pivot)
+
+    swapRows r1 r2 xs =
+      [ choose k row | (k,row) <- zip [0..] xs ]
+      where
+        choose k row
+          | k == r1   = xs !! r2
+          | k == r2   = xs !! r1
+          | otherwise = row
+
+    replaceRow i newRow xs =
+      [ if k == i then newRow else row
+      | (k,row) <- zip [0..] xs ]
+
 
 minor j (_:as) = map (removeAt j) as
   where removeAt n as = take n as ++ drop (n+1) as
@@ -103,7 +152,7 @@ compCoef ms =
 
 
 e_n'' n p m w =
-  (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map (\ms -> (fromIntegral (compCoef ms) `modulo` unPrime p) * f n m w ((createWs w ms) ++ [w^m])) (createMss (fromIntegral m) (n-1)))
+  (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map (`modulo` unPrime p) . runPar $ parMap (\ms -> (fromIntegral $ compCoef ms) * f' n m w ((createWs w ms) ++ [w^m])) (createMss (fromIntegral m) (n-1)))
 
 
 	--    * sum (map
@@ -137,6 +186,8 @@ main :: IO ()
 main = do
   args <- map (read @Natural) <$> getArgs
   let n = args !! 0
+  -- let n = 9
+  print n
   let m = mFor n
   print m
   let p = findPrime m 30
@@ -144,7 +195,9 @@ main = do
   let w = primitiveMthRoot m p
   print w
   print (e_n'' (fromIntegral n) p m w)
-  
+ 
+test :: Par [Int]
+test = parMap (^2) [1..10]
 
 
 -- p = 271
