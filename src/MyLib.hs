@@ -11,6 +11,7 @@ import Control.Monad
 import Control.Monad.Par
 import Data.List (tails, sort, findIndex)
 import qualified Data.Map as M
+import qualified Data.Vector as V
 import System.Environment
 
 findPrime :: Natural -> Int -> Prime Natural
@@ -30,39 +31,33 @@ primitiveMthRoot m p = head
   ]
   where mfacts = map (unPrime . fst) (factorise m)
 
+numRoots :: Natural -> Prime Natural -> Natural
 numRoots m p = gcd m (unPrime p - 1)
+
+numPrimitiveRoots :: Natural -> Prime Natural -> Natural
 numPrimitiveRoots m p
   | (unPrime p - 1) `mod` m == 0 = totient m
   | otherwise = 0
 
-f n m w xs = fstTrm * sndTrm
-  where fstTrm = product [ (powSomeMod xj (-1)) * xk + xj * powSomeMod xk (-1)
-                         | (j:ks) <- tails [0..n-1]
-                         , k <- ks
-                         , let xj = xs !! j
-                         , let xk = xs !! k ]
-        sndTrm = compDropDet n m w xs
-		
-f' n m w xs = read . show $ fstTrm * sndTrm
-  where fstTrm = product [ (powSomeMod xj (-1)) * xk + xj * powSomeMod xk (-1)
-                         | (j:ks) <- tails [0..n-1]
-                         , k <- ks
-                         , let xj = xs !! j
-                         , let xk = xs !! k ]
-        sndTrm = compDropDet n m w xs
+mFor :: Natural -> Natural
+mFor n = head $ filter odd [(n+1) `div` 2, (n+3) `div` 2]
 
-compDropDet n m w xs = det' . dropLast $ compMat n m w xs
-  where dropLast = init . map init
+createMultisetStems :: Int -> Int -> [[Int]]
+createMultisetStems 1 r = [[a] | a <- [0..r]]
+createMultisetStems n 0 = [replicate n 0]
+createMultisetStems n r = [a : b | a <- [0..r], b <- (createMultisetStems (n-1) (r - a))]
 
-det [] = 1
-det [[a]] = a
-det ass@(as:_) =
-  sum [ sign * (as !! j) * det (minor j ass)
-      | j <- [0..length ass-1]
-      , let sign | even j = 1
-                 | otherwise = -1 ]
+createMultisets :: Int -> Int -> [[Int]]
+createMultisets 1 r = [[r]]
+createMultisets n 0 = [replicate n 0]
+createMultisets n r = [a : b | a <- [0..r], b <- (createMultisets (n-1) (r - a))]
 
-det' ass = go 0 ass 1
+expandExponents :: [Int] -> V.Vector Int
+expandExponents multiset = 
+  V.fromListN (sum multiset) (concat . map (uncurry replicate) $ zip multiset [0..]) 
+
+matrixDeterminant :: [[SomeMod]] -> SomeMod
+matrixDeterminant ass = go 0 ass 1
   where
     n = length ass
     go i mat acc
@@ -101,108 +96,77 @@ det' ass = go 0 ass 1
       [ if k == i then newRow else row
       | (k,row) <- zip [0..] xs ]
 
+generateMatrixFromPreComputed :: Int -> V.Vector Int -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> [[SomeMod]]
+generateMatrixFromPreComputed n exponents jkPairs jkSumInverses = 
+  [ [ a j k | k <- [0..n-2] ] | j <- [0..n-2] ] 
+    where a j k
+            | j /= k = negate $ ((jkPairs V.! (exponents V.! j)) V.! (exponents V.! k)) * ((jkSumInverses V.! (exponents V.! j)) V.! (exponents V.! k))
+            | otherwise = sum [ ((jkPairs V.! (exponents V.! j)) V.! (exponents V.! r)) * ((jkSumInverses V.! (exponents V.! j)) V.! (exponents V.! r))
+                          | r <- [0..n-1]
+                          , r /= j
+                      ]
 
-minor j (_:as) = map (removeAt j) as
-  where removeAt n as = take n as ++ drop (n+1) as
-
-
-compMat n m w xs = [ [ a j k xj xk
-                     | k <- [0..n-1]
-                     , let xk = xs !! k ]
-                   | j <- [0..n-1]
-                   , let xj = xs !! j ]
-  where a j k xj xk
-          | j /= k = negate $ xj * (powSomeMod xk (-1)) * (powSomeMod ((powSomeMod xj (-1)) * xk + xj * powSomeMod xk (-1)) (-1))
-          | otherwise = sum [ xj * (powSomeMod xr (-1)) * (powSomeMod ((powSomeMod xj (-1)) * xr + xj * powSomeMod xr (-1)) (-1))
-                            | r <- [0..n-1]
-                            , r /= j
-                            , let xr = xs !! r ]
-
-e_n n p m w =
-  (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map (f n m w) wss)
-  where wss = traceShowId $ (++ [w^m]) . map (powSomeMod w) <$> replicateM (n-1) [0..m-1]
-
-e_n' n p m w =
-  (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map ((cache M.!) . sort) wss)
-  where wss = (++ [w^m]) . map (powSomeMod w) <$> replicateM (n-1) [0..m-1]
-        cache = foldl' go M.empty wss
-        go m ws | Just r <- M.lookup (sort ws) m = m
-                | otherwise = M.insert (sort ws) (f n m w ws) m
-
-
-
-
--- createMss :: Integer -> [[Integer]]
--- createMss targetSum = [ rs | sum [rs] = targetSum, all rs >= 0 ]
-
-createMss :: Int -> Int -> [[Int]]
-createMss 1 r = [[r]]
-createMss n 0 = [replicate n 0]
-createMss n r = [a : b | a <- [0..r], b <- (createMss (n-1) (r - a)) ]
-
-createWs :: SomeMod -> [Int] -> [SomeMod]
-createWs w ms = 
-	-- traceShowWith ("ws", ms, ) $
-	map (powSomeMod w) . concat . map (uncurry replicate) $ zip ms [0..] 
+compDeterminant :: Int -> V.Vector Int -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> SomeMod
+compDeterminant n exponents jkPairs jkSumInverses = 
+  matrixDeterminant $ generateMatrixFromPreComputed n exponents jkPairs jkSumInverses
+  -- matrixDeterminant . dropLast $ generateMatrixFromPreComputed n jkPairs jkSumInverses
+  --   where dropLast = init . map init
 
 compCoef :: [Int] -> Int
-compCoef ms = 
-	-- traceShowWith ("coef", ms, ) $
-	product [1..(sum ms)] `div` product (map (\m -> product [1..m]) ms)
+compCoef multiset = 
+    product [1..(sum multiset)] `div` product (map (\m -> product [1..m]) multiset)
 
+f :: Int -> Natural -> V.Vector Int -> V.Vector SomeMod -> V.Vector SomeMod -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> SomeMod
+f n m exponents mthRoots mthRootInverses jkPairs jkSums jkSumInverses = 
+  -- traceShowWith ("exponents", exponents, ) $
+  fstTrm * sndTrm
+   where fstTrm = product [ (jkSums V.! (exponents V.! j)) V.! (exponents V.! k)
+                          | (j:ks) <- tails [0..n-1]
+                          , k <- ks ]
+         sndTrm = compDeterminant n exponents jkPairs jkSumInverses
 
-e_n'' n p m w =
-  (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * sum (map (`modulo` unPrime p) . runPar $ parMap (\ms -> (fromIntegral $ compCoef ms) * f' n m w ((createWs w ms) ++ [w^m])) (createMss (fromIntegral m) (n-1)))
-
-
-	--    * sum (map
-	--   	(map (compCoef(ms) * f n m w) wss where wss = (++ [w^m]) . map createWs w ms
-	-- where ms = createMss (n-1) (n-1))
-	--
-
-
-main'' :: IO ()
-main'' = do
-  let m = 39
-  let p = findPrime m 300
-  print p
-  let r = primitiveMthRoot m p
-  print r
-  print (r^2)
-  print (r^m)
-  print (r^(2*m))
-
-mFor n = head $ filter odd [(n+1) `div` 2, (n+3) `div` 2]
-
-main' :: IO ()
-main' = do
-  let (Just p) = isPrime 271
-  let m = 3
-  let w = primitiveMthRoot m p
-  print (e_n'' 3 p m w)
-  -- print (e_n 7 p m w)
+compCongruence :: Prime Natural -> Int -> Natural -> V.Vector SomeMod -> V.Vector SomeMod -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) ->  V.Vector (V.Vector SomeMod) -> SomeMod
+compCongruence p n m mthRoots mthRootInverses jkPairs jkSums jkSumInverses = 
+  -- m^(-n+1)
+    (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * 
+  -- parallelized sum of permutations, in exponent parameter space
+  sum (map (`modulo` unPrime p) . runPar $ parMap 
+    (\multiset ->  ((fromIntegral $ compCoef multiset)) * (read . show $ f n m (V.snoc (expandExponents multiset) 0) mthRoots mthRootInverses jkPairs jkSums jkSumInverses)) (createMultisets (fromIntegral m) (n-1)))
+ 
+compCongruenceFromStems :: Prime Natural -> Int -> Natural -> V.Vector SomeMod -> V.Vector SomeMod -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) ->  V.Vector (V.Vector SomeMod) -> SomeMod
+compCongruenceFromStems p n m mthRoots mthRootInverses jkPairs jkSums jkSumInverses = 
+  -- m^(-n+1)
+    (powSomeMod (fromIntegral m `modulo` unPrime p) (-n+1)) * 
+  -- parallelized sum of permutations, in exponent parameter space
+  sum (map (`modulo` unPrime p) . runPar $ parMap 
+    (\multisetStem -> read . show $ sum (map (\multiset -> ((fromIntegral $ compCoef (multisetStem ++ multiset)) * (f n m (V.snoc (expandExponents (multisetStem ++ multiset)) 0) mthRoots mthRootInverses jkPairs jkSums jkSumInverses))) (createMultisets (fromIntegral m - (fromIntegral m `div` 2)) (n-1-(sum multisetStem))))) (createMultisetStems (fromIntegral m `div` 2) (n-1)))
+   
 
 main :: IO ()
 main = do
   args <- map (read @Natural) <$> getArgs
   let n = args !! 0
-  -- let n = 9
-  print n
+  -- let n = 7
+  print ("n = " ++ show n)
   let m = mFor n
-  print m
+  print ("m = " ++ show m)
   let p = findPrime m 30
-  print p
-  let w = primitiveMthRoot m p
-  print w
-  print (e_n'' (fromIntegral n) p m w)
- 
-test :: Par [Int]
-test = parMap (^2) [1..10]
-
-
--- p = 271
--- n = 3 (or 5)
--- m = 3
--- 3rd-root mod 271 = 28
--- e_n 3 = 2
--- e_n 5 = 264
+  print ("p = " ++ show p)
+  let mthRoot = primitiveMthRoot m p
+  print ("mthRoot = " ++ show mthRoot)
+  let mthRoots = V.generate (fromIntegral m) (powSomeMod mthRoot)
+  print ("mthRoots[] = " ++ show mthRoots)
+  let mthRootInverses = V.map (\a -> (powSomeMod a (-1))) mthRoots
+  print ("mthRootInverses[] = " ++ show mthRootInverses)
+  let jkPairs = V.generate (fromIntegral m) (\j -> V.generate (fromIntegral m) (\k -> (mthRoots V.! j) * (mthRootInverses V.! k)))
+  print "jkPairs[][]"
+  putStr (unlines . map (("\t" ++) . show) . V.toList $ jkPairs)
+  let jkSums = V.generate (fromIntegral m) (\j -> V.generate (fromIntegral m) (\k -> (jkPairs V.! j) V.! k + (jkPairs V.! k) V.! j))
+  print "jkSums[][]"
+  putStr (unlines . map (("\t" ++) . show) . V.toList $ jkSums)
+  let jkSumInverses = V.generate (fromIntegral m) (\j -> V.generate (fromIntegral m) (\k -> powSomeMod ((jkSums V.! j) V.! k) (-1)))
+  print "jkSumInverses[][]"
+  putStr (unlines . map (("\t" ++) . show) . V.toList $ jkSumInverses)
+  print (compCongruenceFromStems p (fromIntegral n) m mthRoots mthRootInverses jkPairs jkSums jkSumInverses)
+  
+-- print (e_n''' (fromIntegral n) p m w wm)
