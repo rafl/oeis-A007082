@@ -171,7 +171,7 @@ void print_vec(const size_t *v, size_t len) {
 }
 
 
-void create_ws(uint64_t p, uint64_t w, size_t *ms, size_t len, uint64_t *dst, size_t n) {
+void create_ws(uint64_t p, uint64_t w, size_t *ms, size_t len, uint64_t *dst) {
   uint64_t pow = 1;
   size_t idx = 0;
 
@@ -202,8 +202,102 @@ uint64_t multinomial_mod_p(uint64_t p, const size_t *ms, size_t len) {
   return acc;
 }
 
+static inline uint64_t inv_ell(uint64_t xj, uint64_t xk,
+                               uint64_t inv_j, uint64_t inv_k,
+                               uint64_t p) {
+  uint64_t ell = mul_mod_u64(inv_j, xk, p) + mul_mod_u64(xj, inv_k, p);
+  if (ell >= p) ell -= p;
+  return pow_mod_u64(ell, p-2, p);
+}
+
+static void build_drop_mat(uint64_t *A, size_t dim, const uint64_t *xs, const uint64_t *inv, uint64_t p) {
+  size_t m = dim + 1;
+
+  for (size_t j = 0; j < dim; ++j) {
+    uint64_t rowsum = 0;
+
+    for (size_t k = 0; k < m; ++k) if (j != k) {
+      uint64_t invell = inv_ell(xs[j], xs[k], inv[j], inv[k], p);
+      uint64_t t = mul_mod_u64(xs[j], mul_mod_u64(inv[k], invell, p), p);
+
+      rowsum = rowsum + t < p ? rowsum + t : rowsum + t - p;
+
+      if (k < dim) {
+        A[j*dim + k] = p - t;
+      }
+    }
+    A[j*dim + j] = rowsum;
+  }
+}
+
+uint64_t det_mod_p(uint64_t *A, size_t dim, uint64_t p) {
+  uint64_t det = 1;
+
+  for (size_t k = 0; k < dim; ++k) {
+    size_t pivot = k;
+    while (pivot < dim && A[pivot*dim + k] == 0) ++pivot;
+    //assert(pivot != 0);
+    if (pivot == dim) return 0;
+    if (pivot != k) {
+      for (size_t j = 0; j < dim; ++j) {
+        uint64_t tmp          = A[k*dim + j];
+        A[k*dim + j]          = A[pivot*dim + j];
+        A[pivot*dim + j]      = tmp;
+      }
+      det = p - det;
+    }
+
+    uint64_t inv_pivot = inv_mod_u64(A[k*dim + k], p);
+    det = mul_mod_u64(det, A[k*dim + k], p);
+
+    for (size_t i = k + 1; i < dim; ++i) {
+      uint64_t factor = mul_mod_u64(A[i*dim + k], inv_pivot, p);
+      if (factor == 0) continue;
+
+      for (size_t j = k; j < dim; ++j) {
+        uint64_t tmp = mul_mod_u64(factor, A[k*dim + j], p);
+        uint64_t val = (A[i*dim + j] >= tmp)
+                     ? A[i*dim + j] - tmp
+                     : A[i*dim + j] + p - tmp;
+        A[i*dim + j] = val;
+      }
+    }
+  }
+
+  return det;
+}
+
+uint64_t f_fst_term(const uint64_t *ws, const uint64_t *inv, size_t n, uint64_t p) {
+  uint64_t acc = 1;
+  for (size_t j = 0; j < n; ++j) {
+    for (size_t k = j + 1; k < n; ++k) {
+      uint64_t t = mul_mod_u64(inv[j], ws[k], p) + mul_mod_u64(ws[j], inv[k], p);
+      if (t >= p) t -= p; // faster than % p, i think. sum < 2p is guaranteed
+
+      acc = mul_mod_u64(acc, t, p);
+    }
+  }
+  return acc;
+}
+
+uint64_t f_snd_trm(uint64_t p, const uint64_t *xs, const uint64_t *inv, size_t m) {
+    size_t dim = m-1;
+    uint64_t A[dim*dim];
+
+    build_drop_mat(A, dim, xs, inv, p);
+    return det_mod_p(A, dim, p);
+}
+
+uint64_t f(const uint64_t *ws, size_t n, uint64_t p) {
+  uint64_t inv[n];
+  for (size_t i = 0; i < n; ++i)
+    inv[i] = inv_mod_u64(ws[i], p);
+
+  return mul_mod_u64(f_fst_term(ws, inv, n, p), f_snd_trm(p, ws, inv, n), p);
+}
+
 int main () {
-  uint64_t n = 7, m = m_for(n);
+  uint64_t n = 11, m = m_for(n);
 
   printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
 
@@ -216,16 +310,17 @@ int main () {
   printf("w^-1 = %"PRIu64"\n", inv_mod_u64(w, p));
 
   size_t vec[m], scratch[m];
-  uint64_t ws[n];
+  uint64_t ws[n], acc = 0;
   mss_iter_t it;
   mss_iter_new(&it, m, n-1, vec, scratch);
   while (mss_iter(&it)) {
-    print_vec(vec, m);
-    create_ws(p, w, vec, m, ws, n);
-    print_vec(ws, n);
+    create_ws(p, w, vec, m, ws);
     uint64_t coeff = multinomial_mod_p(p, vec, m);
-    printf("%lu\n", coeff);
+    uint64_t f_n = mul_mod_u64(coeff, f(ws, n, p), p);
+    acc = acc + f_n;
+    if (acc >= p) acc -= p;
   }
+  printf("%lu\n", mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p));
 
   return 0;
 }
