@@ -301,10 +301,11 @@ uint64_t f(const uint64_t *ws, size_t n, uint64_t p) {
 #define PRIME_BITS 61
 static size_t primes_needed(uint64_t n) {
   // theorem #4
-  double log2En = 0.5*(n+1)
+  double log2En = ((n-2.0)*(n+1.0)/2.0)*log2(n)
+                - (n*n)/2.0 * M_LOG2E
+                + (n+1.0)/2.0
                 + 0.5*log2(M_PI)
-                - ((n*n)/2.0 - (11.0*n)/12.0)*M_LOG2E
-                + ((n-2.0)*(n+1.0)/2.0)*log2(n);
+                + (11.0/12.0) * M_LOG2E;
   size_t bits = (size_t)ceil(log2En);
   return (bits+PRIME_BITS-1)/PRIME_BITS;
 }
@@ -336,7 +337,7 @@ int main (int argc, char **argv) {
   #pragma omp parallel for
   for (size_t i = 0; i < np; ++i) {
     uint64_t p = ps[i];
-    printf("p = %"PRIu64, p);
+    printf("p = %"PRIu64"\n", p);
 
     uint64_t w = mth_root_mod_p(p, m);
 
