@@ -11,6 +11,7 @@
 #include <gmp.h>
 #include <assert.h>
 #include <math.h>
+#include <stdlib.h>
 
 typedef unsigned __int128 uint128_t;
 
@@ -308,8 +309,14 @@ static size_t primes_needed(uint64_t n) {
   return (bits+PRIME_BITS-1)/PRIME_BITS;
 }
 
-int main () {
-  uint64_t n = 15, m = m_for(n);
+int main (int argc, char **argv) {
+  uint64_t n = 13;
+
+  if (argc > 1) {
+    n = atoll(argv[1]);
+  }
+
+  uint64_t m = m_for(n);
   printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
 
   size_t np = primes_needed(n);
@@ -326,6 +333,7 @@ int main () {
   mpz_set_ui(X, 0);
   mpz_set_ui(M, 1);
 
+  #pragma omp parallel for
   for (size_t i = 0; i < np; ++i) {
     uint64_t p = ps[i];
     printf("p = %"PRIu64, p);

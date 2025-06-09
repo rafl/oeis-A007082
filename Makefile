@@ -1,5 +1,5 @@
-CFLAGS = -g -std=c18 -O3 -march=native -flto -Wall -Wextra $(shell pkg-config gmp --cflags)
-LDFLAGS = $(shell pkg-config gmp --libs)
+CFLAGS = -g -std=gnu18 -O3 -march=native -flto -fopenmp -Wall -Wextra $(shell pkg-config gmp --cflags)
+LDFLAGS = $(shell pkg-config gmp --libs) -lm
 
 oeis: oeis.c
-	cc $(CFLAGS) oeis.c $(LDFLAGS) -o oeis
+	$(CC) $(CFLAGS) oeis.c $(LDFLAGS) -o oeis
