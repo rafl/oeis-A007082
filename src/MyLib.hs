@@ -6,12 +6,16 @@ import Math.NumberTheory.ArithmeticFunctions
 import Data.Maybe
 import Numeric.Natural
 import Data.Mod
+import Data.STRef
 import Debug.Trace
 import Control.Monad
 import Control.Monad.Par
+import Control.Monad.ST
 import Data.List (tails, sort, findIndex)
 import qualified Data.Map as M
 import qualified Data.Vector as V
+import qualified Data.Vector.Mutable as MV
+
 import System.Environment
 
 findPrime :: Natural -> Int -> Prime Natural
@@ -106,12 +110,35 @@ generateMatrixFromPreComputed n exponents jkPairs jkSumInverses =
                           , r /= j
                       ]
 
-compDeterminant :: Int -> V.Vector Int -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> SomeMod
-compDeterminant n exponents jkPairs jkSumInverses = 
+compDeterminantFromMatrix :: Int -> V.Vector Int -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> SomeMod
+compDeterminantFromMatrix n exponents jkPairs jkSumInverses = 
   matrixDeterminant $ generateMatrixFromPreComputed n exponents jkPairs jkSumInverses
-  -- matrixDeterminant . dropLast $ generateMatrixFromPreComputed n jkPairs jkSumInverses
-  --   where dropLast = init . map init
-
+  
+fMonadic :: Prime Natural -> Int -> Natural -> V.Vector Int -> V.Vector SomeMod -> V.Vector SomeMod -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) -> SomeMod
+fMonadic p n m exponents mthRoots mthRootInverses jkPairs jkSums jkSumInverses = 
+  runST $ do
+    fstTrm <- newSTRef (1 `modulo` unPrime p)
+    mainDiagonal <- MV.replicate (n-1) (0 `modulo` unPrime p)
+    detProducts <- MV.replicate (2 * n - 2) (1 `modulo` unPrime p) --MV.generate (2 * n-2) (\i -> if i < n -1 then return 1 else return -1)
+    -- forM_ [0..(n-1)] $ \k -> do
+    --   forM_ [0..(n-1)] $ \j -> do
+    --     if (j < k) then do
+    --       modifySTRef fstTrm (* ((jkSums V.! (exponents V.! j)) V.! (exponents V.! k)))
+    --       MV.modify mainDiagonal (\x -> ((jkPairs V.! (exponents V.! j)) V.! (exponents V.! k)) * ((jkSumInverses V.! (exponents V.! j)) V.! (exponents V.! k)) + x) k
+    --       MV.modify mainDiagonal (\x -> ((jkPairs V.! (exponents V.! k)) V.! (exponents V.! j)) * ((jkSumInverses V.! (exponents V.! k)) V.! (exponents V.! j)) + x) j
+    --     else return ()
+    --     if (k < (n-1)) then do
+    --       MV.modify detProducts (\x -> x * (-1) * (((jkPairs V.! (exponents V.! k)) V.! (exponents V.! j)) * ((jkSumInverses V.! (exponents V.! k)) V.! (exponents V.! j)))) ((j + k) `rem` (n-1))
+    --       MV.modify detProducts (\x -> x * (-1) * (((jkPairs V.! (exponents V.! k)) V.! (exponents V.! j)) * ((jkSumInverses V.! (exponents V.! k)) V.! (exponents V.! j))))  (n - 1 - ((j + k) `rem` (n-1)))
+    --     else return ()
+    -- diagProducts <- V.unsafeFreeze mainDiagonal
+    -- MV.write detProducts 0 (V.product diagProducts)
+    -- forM_ [0..(n-2)] $ \k -> do
+    --   MV.modify detProducts (\x -> x * (diagProducts V.! k)) ((2*k) `rem` (n-1))
+    --   MV.modify detProducts (\x -> x * (diagProducts V.! k)) (n - 2 - ((2*k) `rem` (n-1)))
+    sndTrm <- MV.read detProducts 0
+    (readSTRef fstTrm) * sndTrm
+      
 compCoef :: [Int] -> Int
 compCoef multiset = 
     product [1..(sum multiset)] `div` product (map (\m -> product [1..m]) multiset)
@@ -123,7 +150,7 @@ f n m exponents mthRoots mthRootInverses jkPairs jkSums jkSumInverses =
    where fstTrm = product [ (jkSums V.! (exponents V.! j)) V.! (exponents V.! k)
                           | (j:ks) <- tails [0..n-1]
                           , k <- ks ]
-         sndTrm = compDeterminant n exponents jkPairs jkSumInverses
+         sndTrm = compDeterminantFromMatrix n exponents jkPairs jkSumInverses
 
 compCongruence :: Prime Natural -> Int -> Natural -> V.Vector SomeMod -> V.Vector SomeMod -> V.Vector (V.Vector SomeMod) -> V.Vector (V.Vector SomeMod) ->  V.Vector (V.Vector SomeMod) -> SomeMod
 compCongruence p n m mthRoots mthRootInverses jkPairs jkSums jkSumInverses = 
@@ -160,13 +187,13 @@ main = do
   print ("mthRootInverses[] = " ++ show mthRootInverses)
   let jkPairs = V.generate (fromIntegral m) (\j -> V.generate (fromIntegral m) (\k -> (mthRoots V.! j) * (mthRootInverses V.! k)))
   print "jkPairs[][]"
-  putStr (unlines . map (("\t" ++) . show) . V.toList $ jkPairs)
+  putStr (unlines . map (("  " ++) . show) . V.toList $ jkPairs)
   let jkSums = V.generate (fromIntegral m) (\j -> V.generate (fromIntegral m) (\k -> (jkPairs V.! j) V.! k + (jkPairs V.! k) V.! j))
   print "jkSums[][]"
-  putStr (unlines . map (("\t" ++) . show) . V.toList $ jkSums)
+  putStr (unlines . map (("  " ++) . show) . V.toList $ jkSums)
   let jkSumInverses = V.generate (fromIntegral m) (\j -> V.generate (fromIntegral m) (\k -> powSomeMod ((jkSums V.! j) V.! k) (-1)))
   print "jkSumInverses[][]"
-  putStr (unlines . map (("\t" ++) . show) . V.toList $ jkSumInverses)
+  putStr (unlines . map (("  " ++) . show) . V.toList $ jkSumInverses)
   print (compCongruenceFromStems p (fromIntegral n) m mthRoots mthRootInverses jkPairs jkSums jkSumInverses)
   
 -- print (e_n''' (fromIntegral n) p m w wm)
