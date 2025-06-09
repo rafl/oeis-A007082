@@ -10,13 +10,14 @@
 #include <string.h>
 #include <gmp.h>
 #include <assert.h>
+#include <math.h>
 
 typedef unsigned __int128 uint128_t;
 
 static inline uint64_t mul_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
-    assert(x < p);
-    assert(y < p);
-    return (uint64_t)((uint128_t)x * y % p);
+  assert(x < p);
+  assert(y < p);
+  return (uint64_t)((uint128_t)x * y % p);
 }
 
 static uint64_t pow_mod_u64(uint64_t b, uint64_t e, uint64_t p) {
@@ -296,31 +297,73 @@ uint64_t f(const uint64_t *ws, size_t n, uint64_t p) {
   return mul_mod_u64(f_fst_term(ws, inv, n, p), f_snd_trm(p, ws, inv, n), p);
 }
 
-int main () {
-  uint64_t n = 11, m = m_for(n);
+#define PRIME_BITS 61
+static size_t primes_needed(uint64_t n) {
+  // theorem #4
+  double log2En = 0.5*(n+1)
+                + 0.5*log2(M_PI)
+                - ((n*n)/2.0 - (11.0*n)/12.0)*M_LOG2E
+                + ((n-2.0)*(n+1.0)/2.0)*log2(n);
+  size_t bits = (size_t)ceil(log2En);
+  return (bits+PRIME_BITS-1)/PRIME_BITS;
+}
 
+int main () {
+  uint64_t n = 15, m = m_for(n);
   printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
 
-  uint64_t p = prime_congruent_1_mod_m(1ULL << 60, m);
-  printf("p = %"PRIu64" (p %% m = %"PRIu64")\n", p, p % m);
-
-  uint64_t w = mth_root_mod_p(p, m);
-  printf("w = %"PRIu64"\n", w);
-  printf("w^m mod p = %"PRIu64"\n", pow_mod_u64(w, m, p));
-  printf("w^-1 = %"PRIu64"\n", inv_mod_u64(w, p));
-
-  size_t vec[m], scratch[m];
-  uint64_t ws[n], acc = 0;
-  mss_iter_t it;
-  mss_iter_new(&it, m, n-1, vec, scratch);
-  while (mss_iter(&it)) {
-    create_ws(p, w, vec, m, ws);
-    uint64_t coeff = multinomial_mod_p(p, vec, m);
-    uint64_t f_n = mul_mod_u64(coeff, f(ws, n, p), p);
-    acc = acc + f_n;
-    if (acc >= p) acc -= p;
+  size_t np = primes_needed(n);
+  printf("np = %zu\n", np);
+  uint64_t ps[np];
+  uint64_t p_base = 1ULL << (PRIME_BITS-1);
+  for (size_t i = 0; i < np; ++i) {
+    ps[i] = prime_congruent_1_mod_m(p_base, m);
+    p_base = ps[i]+1;
   }
-  printf("%lu\n", mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p));
+
+  mpz_t X, M, u, inv, mz, rz;
+  mpz_inits(X, M, u, inv, mz, rz, NULL);
+  mpz_set_ui(X, 0);
+  mpz_set_ui(M, 1);
+
+  for (size_t i = 0; i < np; ++i) {
+    uint64_t p = ps[i];
+    printf("p = %"PRIu64, p);
+
+    uint64_t w = mth_root_mod_p(p, m);
+
+    size_t vec[m], scratch[m];
+    uint64_t ws[n], acc = 0;
+    mss_iter_t it;
+    mss_iter_new(&it, m, n-1, vec, scratch);
+    while (mss_iter(&it)) {
+      create_ws(p, w, vec, m, ws);
+      uint64_t coeff = multinomial_mod_p(p, vec, m);
+      uint64_t f_n = mul_mod_u64(coeff, f(ws, n, p), p);
+      acc = acc + f_n;
+      if (acc >= p) acc -= p;
+    }
+    uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
+    printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
+
+    mpz_set_ui(rz,   ret);
+    mpz_set_ui(mz, p);
+
+    mpz_mod(u, X, mz);
+    mpz_sub(u, rz, u);
+    mpz_mod(u, u, mz);
+
+    assert(mpz_invert(inv, M, mz) != 0);
+
+    mpz_mul(u, u, inv);
+    mpz_mod(u, u, mz);
+    mpz_mul(inv, M, u);
+    mpz_add(X, X, inv);
+    mpz_mul(M, M, mz);
+  }
+
+  gmp_printf("e_n = %Zd (mod %Zd)\n", X, M);
+  mpz_clears(X, M, u, inv, mz, rz, NULL);
 
   return 0;
 }
