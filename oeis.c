@@ -125,29 +125,6 @@ void mss_iter_new(mss_iter_t *const it, size_t n, size_t r, size_t *vec, size_t 
   memset(scratch, 0, n*sizeof(size_t));
 }
 
-uint64_t mss_total(int n, int m) {
-  uint128_t numerator = 1;
-  uint128_t denominator = 1;
-  for (int i = 1; i < m; ++i) {
-    int num = i + n - 1;
-    int den = i;
-    //greedily simplify the new terms
-    if (num % den == 0) {
-      numerator *= num/den;
-    }
-    else {
-      numerator *= num;
-      denominator *= den;
-    } 
-    //greedily simplify the totals
-    if (numerator % denominator == 0) {
-      numerator = numerator / denominator;
-      denominator = 1;
-    }
-  }
-  return (uint64_t)(numerator / denominator);
-}
-
 bool mss_iter(mss_iter_t *restrict it) {
   if (it->fin) return false;
 
@@ -434,10 +411,6 @@ int main(int argc, char **argv) {
     uint64_t w = mth_root_mod_p(p, m);
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
-    uint64_t mss_100pct = mss_total(n, m);
-    printf("# iterations per prime = %"PRIu64"\n", mss_100pct);
-    uint64_t counter = 0;
-    
     size_t vec[m], scratch[m];
     uint64_t exps[n], acc = 0;
     mss_iter_t it;
@@ -448,12 +421,9 @@ int main(int argc, char **argv) {
       uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
       acc = acc + f_n;
       if (acc >= p) acc -= p;
-      ++counter;
-      printf("\rProgress: %"PRIu64"%% complete\r", ((100 * counter) / mss_100pct));
     }
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
-    printf("\n%"PRIu64" %% %"PRIu64"\n", ret, p);
-    printf("Final counter:  %"PRIu64"\n", counter);
+    printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
 
     mpz_set_ui(rz, ret);
     mpz_set_ui(mz, p);
