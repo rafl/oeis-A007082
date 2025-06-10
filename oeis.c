@@ -172,21 +172,6 @@ void print_vec(const size_t *v, size_t len) {
   puts("]");
 }
 
-
-void create_ws(uint64_t p, uint64_t w, size_t *ms, size_t len, uint64_t *dst) {
-  uint64_t pow = 1;
-  size_t idx = 0;
-
-  for (size_t exp = 0; exp < len; ++exp) {
-    for (size_t k = 0; k < ms[exp]; ++k)
-      dst[idx++] = pow;
-
-    pow = mul_mod_u64(pow, w, p);
-  }
-
-  dst[idx] = 1;
-}
-
 void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   size_t idx = 0;
 
@@ -401,11 +386,10 @@ int main(int argc, char **argv) {
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
     size_t vec[m], scratch[m];
-    uint64_t ws[n], exps[n], acc = 0;
+    uint64_t exps[n], acc = 0;
     mss_iter_t it;
     mss_iter_new(&it, m, n-1, vec, scratch);
     while (mss_iter(&it)) {
-      create_ws(p, w, vec, m, ws);
       create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(p, vec, m);
       uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
