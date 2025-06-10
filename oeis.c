@@ -187,6 +187,17 @@ void create_ws(uint64_t p, uint64_t w, size_t *ms, size_t len, uint64_t *dst) {
   dst[idx] = 1;
 }
 
+void create_exps(size_t *ms, size_t len, uint64_t *dst) {
+  size_t idx = 0;
+
+  for (size_t exp = 0; exp < len; ++exp) {
+    for (size_t k = 0; k < ms[exp]; ++k)
+      dst[idx++] = exp;
+  }
+
+  dst[idx] = 1;
+}
+
 uint64_t multinomial_mod_p(uint64_t p, const size_t *ms, size_t len) {
   uint64_t acc = 1, n = 0;
 
@@ -283,11 +294,11 @@ uint64_t f_fst_term(const uint64_t *ws, const uint64_t *inv, size_t n, uint64_t 
 }
 
 uint64_t f_snd_trm(uint64_t p, const uint64_t *xs, const uint64_t *inv, size_t m) {
-    size_t dim = m-1;
-    uint64_t A[dim*dim];
+  size_t dim = m-1;
+  uint64_t A[dim*dim];
 
-    build_drop_mat(A, dim, xs, inv, p);
-    return det_mod_p(A, dim, p);
+  build_drop_mat(A, dim, xs, inv, p);
+  return det_mod_p(A, dim, p);
 }
 
 uint64_t f(const uint64_t *ws, size_t n, uint64_t p) {
@@ -310,7 +321,104 @@ static size_t primes_needed(uint64_t n) {
   return (bits+PRIME_BITS-1)/PRIME_BITS;
 }
 
-int main (int argc, char **argv) {
+typedef struct {
+  uint64_t n, m, p, *ws, *ws_inv, *jk_pairs, *jk_sums, *jk_sum_inverses;
+} prim_ctx_t;
+
+static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
+  return j*m + k;
+}
+
+prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
+  prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
+  ctx->n = n;
+  ctx->m = m;
+  ctx->p = p;
+  ctx->ws = malloc(m*sizeof(uint64_t));
+  for (size_t i = 0; i < m; ++i) {
+    ctx->ws[i] = pow_mod_u64(w, i, p);
+  }
+  ctx->ws_inv = malloc(m*sizeof(uint64_t));
+  for (size_t i = 0; i < m; ++i) {
+    ctx->ws_inv[i] = inv_mod_u64(ctx->ws[i], p);
+  }
+  ctx->jk_pairs = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k)
+      ctx->jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws_inv[k], p);
+  }
+  ctx->jk_sums = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k)
+      ctx->jk_sums[jk_pos(j, k, m)] =
+        ((uint128_t)ctx->jk_pairs[jk_pos(j, k, m)] + ctx->jk_pairs[jk_pos(k, j, m)]) % p;
+  }
+  ctx->jk_sum_inverses = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k)
+      ctx->jk_sum_inverses[jk_pos(j, k, m)] = inv_mod_u64(ctx->jk_sums[jk_pos(j, k, m)], p);
+  }
+  return ctx;
+}
+
+void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->jk_sum_inverses);
+  free(ctx->jk_sums);
+  free(ctx->jk_pairs);
+  free(ctx->ws_inv);
+  free(ctx->ws);
+  free(ctx);
+}
+
+uint64_t f__fst_term(uint64_t *exps, prim_ctx_t *ctx) {
+  uint64_t acc = 1;
+  for (size_t j = 0; j < ctx->n; ++j) {
+    for (size_t k = j + 1; k < ctx->n; ++k) {
+      uint64_t t = ctx->jk_sums[jk_pos(exps[j], exps[k], ctx->m)];
+      if (t >= ctx->p) t -= ctx->p;
+
+      acc = mul_mod_u64(acc, t, ctx->p);
+    }
+  }
+  return acc;
+}
+
+static void build_drop_mat_(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
+  for (size_t j = 0; j < dim; ++j) {
+    for (size_t k = 0; k < dim; ++k) {
+      if (j != k) {
+        A[j*dim + k] = ctx->p - mul_mod_u64(ctx->jk_pairs[jk_pos(exps[j], exps[k], ctx->m)],
+                                            ctx->jk_sum_inverses[jk_pos(exps[j], exps[k], ctx->m)],
+                                            ctx->p);
+      } else {
+        uint64_t acc = 0;
+        for (size_t r = 0; r <= dim; ++r) {
+          if (r != j) {
+            acc += mul_mod_u64(ctx->jk_pairs[jk_pos(exps[j], exps[r], ctx->m)],
+                               ctx->jk_sum_inverses[jk_pos(exps[j], exps[r], ctx->m)],
+                               ctx->p);
+            if (acc > ctx->p) acc -= ctx->p;
+          }
+        }
+        A[j*dim + k] = acc;
+      }
+    }
+  }
+}
+
+uint64_t f__snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
+  size_t dim = ctx->n-1;
+  uint64_t A[dim*dim];
+
+  build_drop_mat_(A, dim, exps, ctx);
+  return det_mod_p(A, dim, ctx->p);
+}
+
+uint64_t f_(uint64_t *exps, prim_ctx_t *ctx) {
+  return mul_mod_u64(f__fst_term(exps, ctx), f__snd_trm(exps, ctx), ctx->p);
+}
+
+int main(int argc, char **argv) {
   uint64_t n = 13;
 
   if (argc > 1) {
@@ -340,22 +448,25 @@ int main (int argc, char **argv) {
     printf("p = %"PRIu64"\n", p);
 
     uint64_t w = mth_root_mod_p(p, m);
+    prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
     size_t vec[m], scratch[m];
-    uint64_t ws[n], acc = 0;
+    uint64_t ws[n], exps[n], acc = 0;
     mss_iter_t it;
     mss_iter_new(&it, m, n-1, vec, scratch);
     while (mss_iter(&it)) {
       create_ws(p, w, vec, m, ws);
+      create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(p, vec, m);
-      uint64_t f_n = mul_mod_u64(coeff, f(ws, n, p), p);
+      //uint64_t f_n = mul_mod_u64(coeff, f(ws, n, p), p);
+      uint64_t f_n = mul_mod_u64(coeff, f_(exps, ctx), p);
       acc = acc + f_n;
       if (acc >= p) acc -= p;
     }
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
 
-    mpz_set_ui(rz,   ret);
+    mpz_set_ui(rz, ret);
     mpz_set_ui(mz, p);
 
     mpz_mod(u, X, mz);
@@ -369,6 +480,8 @@ int main (int argc, char **argv) {
     mpz_mul(inv, M, u);
     mpz_add(X, X, inv);
     mpz_mul(M, M, mz);
+
+    prim_ctx_free(ctx);
   }
 
   gmp_printf("e_n = %Zd (mod %Zd)\n", X, M);
