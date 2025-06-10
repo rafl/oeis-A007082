@@ -223,26 +223,6 @@ static inline uint64_t inv_ell(uint64_t xj, uint64_t xk,
   return pow_mod_u64(ell, p-2, p);
 }
 
-static void build_drop_mat(uint64_t *A, size_t dim, const uint64_t *xs, const uint64_t *inv, uint64_t p) {
-  size_t m = dim + 1;
-
-  for (size_t j = 0; j < dim; ++j) {
-    uint64_t rowsum = 0;
-
-    for (size_t k = 0; k < m; ++k) if (j != k) {
-      uint64_t invell = inv_ell(xs[j], xs[k], inv[j], inv[k], p);
-      uint64_t t = mul_mod_u64(xs[j], mul_mod_u64(inv[k], invell, p), p);
-
-      rowsum = rowsum + t < p ? rowsum + t : rowsum + t - p;
-
-      if (k < dim) {
-        A[j*dim + k] = p - t;
-      }
-    }
-    A[j*dim + j] = rowsum;
-  }
-}
-
 uint64_t det_mod_p(uint64_t *A, size_t dim, uint64_t p) {
   uint64_t det = 1;
 
@@ -278,35 +258,6 @@ uint64_t det_mod_p(uint64_t *A, size_t dim, uint64_t p) {
   }
 
   return det;
-}
-
-uint64_t f_fst_term(const uint64_t *ws, const uint64_t *inv, size_t n, uint64_t p) {
-  uint64_t acc = 1;
-  for (size_t j = 0; j < n; ++j) {
-    for (size_t k = j + 1; k < n; ++k) {
-      uint64_t t = mul_mod_u64(inv[j], ws[k], p) + mul_mod_u64(ws[j], inv[k], p);
-      if (t >= p) t -= p; // faster than % p, i think. sum < 2p is guaranteed
-
-      acc = mul_mod_u64(acc, t, p);
-    }
-  }
-  return acc;
-}
-
-uint64_t f_snd_trm(uint64_t p, const uint64_t *xs, const uint64_t *inv, size_t m) {
-  size_t dim = m-1;
-  uint64_t A[dim*dim];
-
-  build_drop_mat(A, dim, xs, inv, p);
-  return det_mod_p(A, dim, p);
-}
-
-uint64_t f(const uint64_t *ws, size_t n, uint64_t p) {
-  uint64_t inv[n];
-  for (size_t i = 0; i < n; ++i)
-    inv[i] = inv_mod_u64(ws[i], p);
-
-  return mul_mod_u64(f_fst_term(ws, inv, n, p), f_snd_trm(p, ws, inv, n), p);
 }
 
 #define PRIME_BITS 61
@@ -370,7 +321,7 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-uint64_t f__fst_term(uint64_t *exps, prim_ctx_t *ctx) {
+uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   uint64_t acc = 1;
   for (size_t j = 0; j < ctx->n; ++j) {
     for (size_t k = j + 1; k < ctx->n; ++k) {
@@ -383,7 +334,7 @@ uint64_t f__fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   return acc;
 }
 
-static void build_drop_mat_(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
+static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
   const size_t m = dim+1;
   const uint64_t p = ctx->p;
 
@@ -405,16 +356,16 @@ static void build_drop_mat_(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t 
   }
 }
 
-uint64_t f__snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
+uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
   size_t dim = ctx->n-1;
   uint64_t A[dim*dim];
 
-  build_drop_mat_(A, dim, exps, ctx);
+  build_drop_mat(A, dim, exps, ctx);
   return det_mod_p(A, dim, ctx->p);
 }
 
-uint64_t f_(uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f__fst_term(exps, ctx), f__snd_trm(exps, ctx), ctx->p);
+uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
+  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
 }
 
 int main(int argc, char **argv) {
@@ -457,8 +408,7 @@ int main(int argc, char **argv) {
       create_ws(p, w, vec, m, ws);
       create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(p, vec, m);
-      //uint64_t f_n = mul_mod_u64(coeff, f(ws, n, p), p);
-      uint64_t f_n = mul_mod_u64(coeff, f_(exps, ctx), p);
+      uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
       acc = acc + f_n;
       if (acc >= p) acc -= p;
     }
