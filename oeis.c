@@ -200,14 +200,6 @@ uint64_t multinomial_mod_p(uint64_t p, const size_t *ms, size_t len) {
   return acc;
 }
 
-static inline uint64_t inv_ell(uint64_t xj, uint64_t xk,
-                               uint64_t inv_j, uint64_t inv_k,
-                               uint64_t p) {
-  uint64_t ell = mul_mod_u64(inv_j, xk, p) + mul_mod_u64(xj, inv_k, p);
-  if (ell >= p) ell -= p;
-  return pow_mod_u64(ell, p-2, p);
-}
-
 static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
   uint128_t t = (uint128_t)a * b;
   uint64_t m = (uint64_t)t * p_dash;
@@ -215,43 +207,6 @@ static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_d
   uint64_t res  = u >> 64;
   if (res >= p) res -= p;
   return res;
-}
-
-uint64_t det_mod_p(uint64_t *A, size_t dim, uint64_t p, uint64_t p_dash, uint64_t R, uint64_t R2) {
-  uint64_t det = R;
-
-  for (size_t k = 0; k < dim; ++k) {
-    size_t pivot = k;
-    while (pivot < dim && A[pivot*dim + k] == 0) ++pivot;
-    //assert(pivot != 0);
-    if (pivot == dim) return 0;
-    if (pivot != k) {
-      for (size_t j = 0; j < dim; ++j) {
-        uint64_t tmp          = A[k*dim + j];
-        A[k*dim + j]          = A[pivot*dim + j];
-        A[pivot*dim + j]      = tmp;
-      }
-      det = p - det;
-    }
-
-    uint64_t inv_pivot = mont_mul(inv_mod_u64(mont_mul(A[k*dim + k], 1, p, p_dash), p), R2, p, p_dash);
-    det = mont_mul(det, A[k*dim + k], p, p_dash);
-
-    for (size_t i = k + 1; i < dim; ++i) {
-      uint64_t factor = mont_mul(A[i*dim + k], inv_pivot, p, p_dash);
-      if (factor == 0) continue;
-
-      for (size_t j = k; j < dim; ++j) {
-        uint64_t tmp = mont_mul(factor, A[k*dim + j], p, p_dash);
-        uint64_t val = (A[i*dim + j] >= tmp)
-                     ? A[i*dim + j] - tmp
-                     : A[i*dim + j] + p - tmp;
-        A[i*dim + j] = val;
-      }
-    }
-  }
-
-  return det;
 }
 
 #define PRIME_BITS 61
@@ -291,7 +246,7 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   ctx->m = m;
   ctx->p = p;
   ctx->p_dash = (uint64_t)(0 - inv64_u64(p));
-  ctx->r = (uint64_t)(((__uint128_t)1 << 64) % p);
+  ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
   ctx->ws = malloc(m*sizeof(uint64_t));
   for (size_t i = 0; i < m; ++i) {
@@ -329,6 +284,44 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
+uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
+  const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2;
+  uint64_t det = ctx->r;
+
+  for (size_t k = 0; k < dim; ++k) {
+    size_t pivot = k;
+    while (pivot < dim && A[pivot*dim + k] == 0) ++pivot;
+    //assert(pivot != 0);
+    if (pivot == dim) return 0;
+    if (pivot != k) {
+      for (size_t j = 0; j < dim; ++j) {
+        uint64_t tmp          = A[k*dim + j];
+        A[k*dim + j]          = A[pivot*dim + j];
+        A[pivot*dim + j]      = tmp;
+      }
+      det = p - det;
+    }
+
+    uint64_t inv_pivot = mont_mul(inv_mod_u64(mont_mul(A[k*dim + k], 1, p, p_dash), p), r2, p, p_dash);
+    det = mont_mul(det, A[k*dim + k], p, p_dash);
+
+    for (size_t i = k + 1; i < dim; ++i) {
+      uint64_t factor = mont_mul(A[i*dim + k], inv_pivot, p, p_dash);
+      if (factor == 0) continue;
+
+      for (size_t j = k; j < dim; ++j) {
+        uint64_t tmp = mont_mul(factor, A[k*dim + j], p, p_dash);
+        uint64_t val = (A[i*dim + j] >= tmp)
+                     ? A[i*dim + j] - tmp
+                     : A[i*dim + j] + p - tmp;
+        A[i*dim + j] = val;
+      }
+    }
+  }
+
+  return det;
+}
+
 uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   uint64_t acc = 1;
   for (size_t j = 0; j < ctx->n; ++j) {
@@ -342,25 +335,25 @@ uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   return acc;
 }
 
-static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx,
-                           uint64_t p, uint64_t p_dash, uint64_t R2) {
-  const size_t m = dim+1;
+static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
+  const size_t r = dim+1;
+  const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2, m = ctx->m;
 
   for (size_t j = 0; j < dim; ++j) {
       uint64_t acc = 0;
 
-      for (size_t k = 0; k < m; ++k) if (j != k) {
-        const size_t pos = jk_pos(exps[j], exps[k], ctx->m);
+      for (size_t k = 0; k < r; ++k) if (j != k) {
+        const size_t pos = jk_pos(exps[j], exps[k], m);
         uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], ctx->jk_sum_inverses[pos], p);
 
         acc = acc + t;
         if (acc >= p) acc -= p;
 
         if (k < dim)
-          A[j*dim + k] = mont_mul(p - t, R2, p, p_dash);
+          A[j*dim + k] = mont_mul(p - t, r2, p, p_dash);
       }
 
-      A[j*dim + j] = mont_mul(acc, R2, p, p_dash);
+      A[j*dim + j] = mont_mul(acc, r2, p, p_dash);
   }
 }
 
@@ -368,8 +361,8 @@ uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
   size_t dim = ctx->n-1;
   uint64_t A[dim*dim];
 
-  build_drop_mat(A, dim, exps, ctx, ctx->p, ctx->p_dash, ctx->r2);
-  return mont_mul(det_mod_p(A, dim, ctx->p, ctx->p_dash, ctx->r, ctx->r2), 1, ctx->p, ctx->p_dash);
+  build_drop_mat(A, dim, exps, ctx);
+  return mont_mul(det_mod_p(A, dim, ctx), 1, ctx->p, ctx->p_dash);
 }
 
 uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
