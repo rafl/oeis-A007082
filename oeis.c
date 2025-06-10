@@ -222,7 +222,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_sums, *jk_sum_inverses;
+  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_sums, *jk_sum_inverses, *jk_prod_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -272,10 +272,19 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
     for (size_t k = 0; k < m; ++k)
       ctx->jk_sum_inverses[jk_pos(j, k, m)] = inv_mod_u64(ctx->jk_sums[jk_pos(j, k, m)], p);
   }
+  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k) {
+      size_t pos = jk_pos(j, k, m);
+      uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], ctx->jk_sum_inverses[pos], p);
+      ctx->jk_prod_M[pos] = mont_mul(t, ctx->r2, p, ctx->p_dash);
+    }
+  }
   return ctx;
 }
 
 void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->jk_prod_M);
   free(ctx->jk_sum_inverses);
   free(ctx->jk_sums);
   free(ctx->jk_pairs);
@@ -291,17 +300,17 @@ uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   for (size_t k = 0; k < dim; ++k) {
     size_t pivot = k;
     while (pivot < dim && A[pivot*dim + k] == 0) ++pivot;
-    //assert(pivot != 0);
     if (pivot == dim) return 0;
     if (pivot != k) {
       for (size_t j = 0; j < dim; ++j) {
-        uint64_t tmp          = A[k*dim + j];
-        A[k*dim + j]          = A[pivot*dim + j];
-        A[pivot*dim + j]      = tmp;
+        uint64_t tmp = A[k*dim + j];
+        A[k*dim + j] = A[pivot*dim + j];
+        A[pivot*dim + j] = tmp;
       }
       det = p - det;
     }
 
+    // eh whatever it's only like 20ish of these
     uint64_t inv_pivot = mont_mul(inv_mod_u64(mont_mul(A[k*dim + k], 1, p, p_dash), p), r2, p, p_dash);
     det = mont_mul(det, A[k*dim + k], p, p_dash);
 
@@ -337,23 +346,24 @@ uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
 
 static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
   const size_t r = dim+1;
-  const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2, m = ctx->m;
+  const uint64_t p = ctx->p, m = ctx->m;
 
   for (size_t j = 0; j < dim; ++j) {
-      uint64_t acc = 0;
+    uint64_t acc = 0;
 
-      for (size_t k = 0; k < r; ++k) if (j != k) {
-        const size_t pos = jk_pos(exps[j], exps[k], m);
-        uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], ctx->jk_sum_inverses[pos], p);
+    for (size_t k = 0; k < r; ++k) if (j != k) {
+      const size_t pos = jk_pos(exps[j], exps[k], m);
+      uint64_t t = ctx->jk_prod_M[pos];
 
-        acc = acc + t;
-        if (acc >= p) acc -= p;
+      acc = acc + t;
+      if (acc >= p) acc -= p;
 
-        if (k < dim)
-          A[j*dim + k] = mont_mul(p - t, r2, p, p_dash);
+      if (k < dim) {
+        A[j*dim + k] = (t == 0) ? 0 : p - t;
       }
+    }
 
-      A[j*dim + j] = mont_mul(acc, r2, p, p_dash);
+    A[j*dim + j] = acc;
   }
 }
 
