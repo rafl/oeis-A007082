@@ -384,25 +384,24 @@ uint64_t f__fst_term(uint64_t *exps, prim_ctx_t *ctx) {
 }
 
 static void build_drop_mat_(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
+  const size_t m = dim+1;
+  const uint64_t p = ctx->p;
+
   for (size_t j = 0; j < dim; ++j) {
-    for (size_t k = 0; k < dim; ++k) {
-      if (j != k) {
-        A[j*dim + k] = ctx->p - mul_mod_u64(ctx->jk_pairs[jk_pos(exps[j], exps[k], ctx->m)],
-                                            ctx->jk_sum_inverses[jk_pos(exps[j], exps[k], ctx->m)],
-                                            ctx->p);
-      } else {
-        uint64_t acc = 0;
-        for (size_t r = 0; r <= dim; ++r) {
-          if (r != j) {
-            acc += mul_mod_u64(ctx->jk_pairs[jk_pos(exps[j], exps[r], ctx->m)],
-                               ctx->jk_sum_inverses[jk_pos(exps[j], exps[r], ctx->m)],
-                               ctx->p);
-            if (acc > ctx->p) acc -= ctx->p;
-          }
-        }
-        A[j*dim + k] = acc;
+      uint64_t acc = 0;
+
+      for (size_t k = 0; k < m; ++k) if (j != k) {
+        const size_t pos = jk_pos(exps[j], exps[k], ctx->m);
+        uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], ctx->jk_sum_inverses[pos], p);
+
+        acc = acc + t;
+        if (acc >= p) acc -= p;
+
+        if (k < dim)
+          A[j*dim + k] = p - t;
       }
-    }
+
+      A[j*dim + j] = acc;
   }
 }
 
