@@ -183,23 +183,6 @@ void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   dst[idx] = 1;
 }
 
-uint64_t multinomial_mod_p(uint64_t p, const size_t *ms, size_t len) {
-  uint64_t acc = 1, n = 0;
-
-  for (size_t i = 0; i < len; ++i) {
-    for (size_t k = 1; k <= ms[i]; ++k)
-      acc = mul_mod_u64(acc, ++n, p);
-
-    uint64_t d = 1;
-    for (size_t k = 1; k <= ms[i]; ++k)
-      d = mul_mod_u64(d, k, p);
-
-    uint64_t dinv = pow_mod_u64(d, p - 2, p);
-    acc = mul_mod_u64(acc, dinv, p);
-  }
-  return acc;
-}
-
 static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
   uint128_t t = (uint128_t)a * b;
   uint64_t m = (uint64_t)t * p_dash;
@@ -222,7 +205,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_sums, *jk_sum_inverses, *jk_prod_M;
+  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_sums, *jk_sum_inverses, *jk_prod_M, *nat_M, *jk_sums_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -280,10 +263,23 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
       ctx->jk_prod_M[pos] = mont_mul(t, ctx->r2, p, ctx->p_dash);
     }
   }
+  ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
+  for (size_t i = 1; i <= n; ++i)
+    ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
+  ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k) {
+      size_t pos = jk_pos(j,k,m);
+      ctx->jk_sums_M[pos] = mont_mul(ctx->jk_sums[pos], ctx->r2, p, ctx->p_dash);
+    }
+  }
+
   return ctx;
 }
 
 void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->jk_sums_M);
+  free(ctx->nat_M);
   free(ctx->jk_prod_M);
   free(ctx->jk_sum_inverses);
   free(ctx->jk_sums);
@@ -291,6 +287,25 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->ws_inv);
   free(ctx->ws);
   free(ctx);
+}
+
+uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
+  const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2, *natM = ctx->nat_M, r = ctx->r;
+  uint64_t acc = r, n = 0;
+
+  for (size_t i = 0; i < len; ++i) {
+    uint64_t d = r;
+
+    for (size_t k = 1; k <= ms[i]; ++k) {
+      acc = mont_mul(acc, natM[++n], p, p_dash);
+      d = mont_mul(d, natM[k], p, p_dash);
+    }
+
+    uint64_t dinv = mont_mul(inv_mod_u64(mont_mul(d, 1, p, p_dash), p), r2, p, p_dash);
+    acc = mont_mul(acc, dinv, p, p_dash);
+  }
+
+  return mont_mul(acc, 1, p, p_dash);
 }
 
 uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
@@ -332,16 +347,14 @@ uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
 }
 
 uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
-  uint64_t acc = 1;
+  uint64_t acc = ctx->r;
   for (size_t j = 0; j < ctx->n; ++j) {
     for (size_t k = j + 1; k < ctx->n; ++k) {
-      uint64_t t = ctx->jk_sums[jk_pos(exps[j], exps[k], ctx->m)];
-      if (t >= ctx->p) t -= ctx->p;
-
-      acc = mul_mod_u64(acc, t, ctx->p);
+      uint64_t t = ctx->jk_sums_M[jk_pos(exps[j], exps[k], ctx->m)];
+      acc = mont_mul(acc, t, ctx->p, ctx->p_dash);
     }
   }
-  return acc;
+  return mont_mul(acc, 1, ctx->p, ctx->p_dash);
 }
 
 static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
@@ -417,7 +430,7 @@ int main(int argc, char **argv) {
     mss_iter_new(&it, m, n-1, vec, scratch);
     while (mss_iter(&it)) {
       create_exps(vec, m, exps);
-      uint64_t coeff = multinomial_mod_p(p, vec, m);
+      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
       uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
       acc = acc + f_n;
       if (acc >= p) acc -= p;
