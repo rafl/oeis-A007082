@@ -435,6 +435,7 @@ int main(int argc, char **argv) {
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
     uint64_t mss_100pct = mss_total(n, m);
+    uint64_t mss_1pct = mss_100pct / 100;
     printf("# iterations per prime = %"PRIu64"\n", mss_100pct);
     uint64_t counter = 0;
     
@@ -449,7 +450,9 @@ int main(int argc, char **argv) {
       acc = acc + f_n;
       if (acc >= p) acc -= p;
       ++counter;
-      printf("\rProgress: %"PRIu64"%% complete\r", ((100 * counter) / mss_100pct));
+      if (counter % mss1pct == 0) {
+        printf("\rProgress: %"PRIu64"%% complete\r", ((100 * counter) / mss_100pct));
+      }
     }
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("\n%"PRIu64" %% %"PRIu64"\n", ret, p);
