@@ -250,16 +250,11 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
       jk_sums[jk_pos(j, k, m)] =
         ((uint128_t)ctx->jk_pairs[jk_pos(j, k, m)] + ctx->jk_pairs[jk_pos(k, j, m)]) % p;
   }
-  uint64_t jk_sum_inverses[m*m];
-  for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k)
-      jk_sum_inverses[jk_pos(j, k, m)] = inv_mod_u64(jk_sums[jk_pos(j, k, m)], p);
-  }
   ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
-      uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], jk_sum_inverses[pos], p);
+      uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
       ctx->jk_prod_M[pos] = mont_mul(t, ctx->r2, p, ctx->p_dash);
     }
   }
