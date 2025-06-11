@@ -205,7 +205,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_prod_M, *nat_M, *jk_sums_M;
+  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_prod_M, *nat_M, *jk_sums_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -239,22 +239,22 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   for (size_t i = 0; i < m; ++i) {
     ctx->ws_inv[i] = inv_mod_u64(ctx->ws[i], p);
   }
-  ctx->jk_pairs = malloc(m*m*sizeof(uint64_t));
+  uint64_t jk_pairs[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      ctx->jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws_inv[k], p);
+      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws_inv[k], p);
   }
   uint64_t jk_sums[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
       jk_sums[jk_pos(j, k, m)] =
-        ((uint128_t)ctx->jk_pairs[jk_pos(j, k, m)] + ctx->jk_pairs[jk_pos(k, j, m)]) % p;
+        ((uint128_t)jk_pairs[jk_pos(j, k, m)] + jk_pairs[jk_pos(k, j, m)]) % p;
   }
   ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
-      uint64_t t = mul_mod_u64(ctx->jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
+      uint64_t t = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
       ctx->jk_prod_M[pos] = mont_mul(t, ctx->r2, p, ctx->p_dash);
     }
   }
@@ -276,7 +276,6 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
-  free(ctx->jk_pairs);
   free(ctx->ws_inv);
   free(ctx->ws);
   free(ctx);
