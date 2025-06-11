@@ -205,7 +205,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_prod_M, *nat_M, *jk_sums_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *jk_sums_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -231,18 +231,19 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   ctx->p_dash = (uint64_t)(0 - inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
-  ctx->ws = malloc(m*sizeof(uint64_t));
-  for (size_t i = 0; i < m; ++i) {
-    ctx->ws[i] = pow_mod_u64(w, i, p);
-  }
-  ctx->ws_inv = malloc(m*sizeof(uint64_t));
-  for (size_t i = 0; i < m; ++i) {
-    ctx->ws_inv[i] = inv_mod_u64(ctx->ws[i], p);
-  }
+
+  // TODO: move all of the locals into M-space for neatness. wouldn't really
+  // affect total run-time cause it's all per-prime only.
+  uint64_t ws[m];
+  for (size_t i = 0; i < m; ++i)
+    ws[i] = pow_mod_u64(w, i, p);
+  uint64_t ws_inv[m];
+  for (size_t i = 0; i < m; ++i)
+    ws_inv[i] = inv_mod_u64(ws[i], p);
   uint64_t jk_pairs[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws_inv[k], p);
+      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ws[j], ws_inv[k], p);
   }
   uint64_t jk_sums[m*m];
   for (size_t j = 0; j < m; ++j) {
@@ -259,6 +260,10 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
     }
   }
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
+  // nat_M[0] is intentionally uninitialised to maximise developer engagement
+  // when that inevitably backfires. index is off by one to avoid extra maths
+  // during look-ups, which might be a premature optimisation. the extra word
+  // of memory doesn't matter.
   for (size_t i = 1; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
@@ -276,8 +281,6 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
-  free(ctx->ws_inv);
-  free(ctx->ws);
   free(ctx);
 }
 
