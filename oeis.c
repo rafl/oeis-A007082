@@ -187,7 +187,7 @@ static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_d
   uint128_t t = (uint128_t)a * b;
   uint64_t m = (uint64_t)t * p_dash;
   uint128_t u = t + (uint128_t)m * p;
-  uint64_t res  = u >> 64;
+  uint64_t res = u >> 64;
   if (res >= p) res -= p;
   return res;
 }
@@ -205,7 +205,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_sums, *jk_sum_inverses, *jk_prod_M, *nat_M, *jk_sums_M;
+  uint64_t n, m, p, p_dash, r, r2, *ws, *ws_inv, *jk_pairs, *jk_sum_inverses, *jk_prod_M, *nat_M, *jk_sums_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -244,16 +244,16 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
     for (size_t k = 0; k < m; ++k)
       ctx->jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws_inv[k], p);
   }
-  ctx->jk_sums = malloc(m*m*sizeof(uint64_t));
+  uint64_t jk_sums[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      ctx->jk_sums[jk_pos(j, k, m)] =
+      jk_sums[jk_pos(j, k, m)] =
         ((uint128_t)ctx->jk_pairs[jk_pos(j, k, m)] + ctx->jk_pairs[jk_pos(k, j, m)]) % p;
   }
   ctx->jk_sum_inverses = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      ctx->jk_sum_inverses[jk_pos(j, k, m)] = inv_mod_u64(ctx->jk_sums[jk_pos(j, k, m)], p);
+      ctx->jk_sum_inverses[jk_pos(j, k, m)] = inv_mod_u64(jk_sums[jk_pos(j, k, m)], p);
   }
   ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
@@ -270,7 +270,7 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j,k,m);
-      ctx->jk_sums_M[pos] = mont_mul(ctx->jk_sums[pos], ctx->r2, p, ctx->p_dash);
+      ctx->jk_sums_M[pos] = mont_mul(jk_sums[pos], ctx->r2, p, ctx->p_dash);
     }
   }
 
@@ -282,7 +282,6 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
   free(ctx->jk_sum_inverses);
-  free(ctx->jk_sums);
   free(ctx->jk_pairs);
   free(ctx->ws_inv);
   free(ctx->ws);
