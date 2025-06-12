@@ -452,16 +452,32 @@ int main(int argc, char **argv) {
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
     size_t vec[m], scratch[m];
-    uint64_t exps[n], acc = 0;
+    uint64_t acc = 0;
     mss_iter_t it;
     mss_iter_new(&it, m, n-1, vec, scratch);
-    const uint64_t mss_siz = mss_iter_size(&it);
-    for (size_t j = 0; j < mss_siz; ++j) {
-      assert(mss_iter(&it));
-      create_exps(vec, m, exps);
-      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
-      uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
-      acc = add_mod_u64(acc, f_n, p);
+    #pragma omp parallel
+    {
+      size_t l_vec[m];
+      uint64_t l_exps[n], l_acc = 0;
+      for (;;) {
+        bool have_job;
+        #pragma omp critical
+        {
+          have_job = mss_iter(&it);
+          if (have_job)
+            // unfortunate, but fine performance-wise it seems.
+            // we'd have to restructure how multisets are generated to make this nicer.
+            memcpy(l_vec, vec, m*sizeof(size_t));
+        }
+        if (!have_job) break;
+
+        create_exps(l_vec, m, l_exps);
+        uint64_t coeff = multinomial_mod_p(ctx, l_vec, m);
+        uint64_t f_n = mul_mod_u64(coeff, f(l_exps, ctx), p);
+        l_acc = add_mod_u64(l_acc, f_n, p);
+      }
+      #pragma omp critical
+      acc = add_mod_u64(acc, l_acc, p);
     }
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
