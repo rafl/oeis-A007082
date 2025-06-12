@@ -12,6 +12,9 @@
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h>
+#include <stdatomic.h>
+#include <unistd.h>
+#include <pthread.h>
 
 typedef unsigned __int128 uint128_t;
 
@@ -416,6 +419,35 @@ uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
   return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
 }
 
+typedef struct {
+  _Atomic size_t *done;
+  size_t tot;
+  bool quit;
+  pthread_cond_t cv;
+  pthread_mutex_t mu;
+} progress_t;
+
+void *progress(void *_ud) {
+  progress_t *ud = _ud;
+  size_t tot = ud->tot;
+  _Atomic size_t *done = ud->done;
+
+  pthread_mutex_lock(&ud->mu);
+  while (!ud->quit) {
+    size_t d = atomic_load_explicit(done, memory_order_relaxed);
+    double pct = 100.0 * d / tot;
+    fprintf(stderr, "\r%5.2f%%", pct);
+    if (d >= tot) break;
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    ts.tv_sec += 1;
+    pthread_cond_timedwait(&ud->cv, &ud->mu, &ts);
+  }
+  pthread_mutex_unlock(&ud->mu);
+  fprintf(stderr, "\r");
+  return NULL;
+}
+
 int main(int argc, char **argv) {
   uint64_t n = 13;
 
@@ -453,30 +485,46 @@ int main(int argc, char **argv) {
     uint64_t acc = 0;
     mss_iter_t it;
     mss_iter_new(&it, m, n-1, vec, scratch);
+    size_t mss_siz = mss_iter_size(&it);
+    _Atomic size_t done = 0;
+    progress_t st = { .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER };
+    pthread_condattr_t ca;
+    pthread_condattr_init(&ca);
+    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+    pthread_cond_init(&st.cv, &ca);
+    pthread_condattr_destroy(&ca);
+    pthread_t prog;
+    pthread_create(&prog, NULL, progress, &st);
     #pragma omp parallel
     {
-      size_t l_vec[m];
+      #define CHUNK 64
+      size_t buf[CHUNK][m];
       uint64_t l_exps[n], l_acc = 0;
       for (;;) {
-        bool have_job;
+        size_t got = 0;
         #pragma omp critical
         {
-          have_job = mss_iter(&it);
-          if (have_job)
-            // unfortunate, but fine performance-wise it seems.
-            // we'd have to restructure how multisets are generated to make this nicer.
-            memcpy(l_vec, vec, m*sizeof(size_t));
+          while (got < CHUNK && mss_iter(&it))
+            memcpy(buf[got++], vec, m*sizeof(size_t));
+          atomic_fetch_add_explicit(&done, got, memory_order_relaxed);
         }
-        if (!have_job) break;
+        if (!got) break;
 
-        create_exps(l_vec, m, l_exps);
-        uint64_t coeff = multinomial_mod_p(ctx, l_vec, m);
-        uint64_t f_n = mul_mod_u64(coeff, f(l_exps, ctx), p);
-        l_acc = add_mod_u64(l_acc, f_n, p);
+        for (size_t c = 0; c < got; ++c) {
+          create_exps(buf[c], m, l_exps);
+          uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
+          uint64_t f_n = mul_mod_u64(coeff, f(l_exps, ctx), p);
+          l_acc = add_mod_u64(l_acc, f_n, p);
+        }
       }
       #pragma omp critical
       acc = add_mod_u64(acc, l_acc, p);
     }
+    pthread_mutex_lock(&st.mu);
+    st.quit = true;
+    pthread_cond_signal(&st.cv);
+    pthread_mutex_unlock(&st.mu);
+    pthread_join(prog, NULL);
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
 
