@@ -406,15 +406,18 @@ int main(int argc, char **argv) {
     p_base = ps[i]+1;
   }
 
-  mpz_t X, M, u, inv, mz, rz;
-  mpz_inits(X, M, u, inv, mz, rz, NULL);
+  mpz_t X, M, Xp, Mp, u, inv, mz, rz;
+  mpz_inits(X, M, Xp, Mp, u, inv, mz, rz, NULL);
   mpz_set_ui(X, 0);
   mpz_set_ui(M, 1);
+  bool converged = false;
 
-  #pragma omp parallel for
   for (size_t i = 0; i < np; ++i) {
     uint64_t p = ps[i];
     printf("p = %"PRIu64"\n", p);
+
+    mpz_set(Xp, X);
+    mpz_set(Mp, M);
 
     uint64_t w = mth_root_mod_p(p, m);
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
@@ -449,10 +452,25 @@ int main(int argc, char **argv) {
     mpz_mul(M, M, mz);
 
     prim_ctx_free(ctx);
+
+    if (i > 0) {
+      mpz_t tmp;
+      mpz_init(tmp);
+      mpz_mod(tmp, X, Mp);
+      if (mpz_cmp(tmp, Xp) == 0) {
+        converged = true;
+        gmp_printf("e(%d) = %Zd (after %zu primes, mod %Zd)\n", n, X, i+1, M);
+        mpz_clear(tmp);
+        break;
+      }
+      mpz_clear(tmp);
+    }
   }
 
-  gmp_printf("e_n = %Zd (mod %Zd)\n", X, M);
-  mpz_clears(X, M, u, inv, mz, rz, NULL);
+  if (!converged)
+    gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", X, M);
+
+  mpz_clears(X, M, Xp, Mp, u, inv, mz, rz, NULL);
 
   return 0;
 }
