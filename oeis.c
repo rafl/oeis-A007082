@@ -551,7 +551,7 @@ int main(int argc, char **argv) {
         gmp_printf("\ne(%d) = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
         break;
       } else
-        gmp_printf("??e(%d)?? = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
+        gmp_printf("e(%d) >= %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
     }
   }
 
