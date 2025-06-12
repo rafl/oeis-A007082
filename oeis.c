@@ -500,16 +500,11 @@ int main(int argc, char **argv) {
     prim_ctx_free(ctx);
 
     if (i > 0) {
-      mpz_t tmp;
-      mpz_init(tmp);
-      mpz_mod(tmp, X, Mp);
-      if (mpz_cmp(tmp, Xp) == 0) {
+      if (mpz_cmp(X, Xp) == 0) {
         converged = true;
         gmp_printf("e(%d) = %Zd (after %zu primes, mod %Zd)\n", n, X, i+1, M);
-        mpz_clear(tmp);
         break;
       }
-      mpz_clear(tmp);
     }
   }
 
