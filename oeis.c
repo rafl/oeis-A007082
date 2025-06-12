@@ -427,7 +427,6 @@ int main(int argc, char **argv) {
   printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
 
   size_t np = primes_needed(n);
-  printf("np = %zu\n", np);
   uint64_t ps[np];
   uint64_t p_base = 1ULL << (PRIME_BITS-1);
   for (size_t i = 0; i < np; ++i) {
@@ -443,7 +442,6 @@ int main(int argc, char **argv) {
 
   for (size_t i = 0; i < np; ++i) {
     uint64_t p = ps[i];
-    printf("p = %"PRIu64"\n", p);
 
     mpz_set(Xp, X);
     mpz_set(Mp, M);
@@ -502,9 +500,10 @@ int main(int argc, char **argv) {
     if (i > 0) {
       if (mpz_cmp(X, Xp) == 0) {
         converged = true;
-        gmp_printf("e(%d) = %Zd (after %zu primes, mod %Zd)\n", n, X, i+1, M);
+        gmp_printf("\ne(%d) = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
         break;
-      }
+      } else
+        gmp_printf("??e(%d)?? = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
     }
   }
 
