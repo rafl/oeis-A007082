@@ -15,6 +15,12 @@
 
 typedef unsigned __int128 uint128_t;
 
+static inline uint64_t add_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
+  x += y;
+  if (x >= p) x -= p;
+  return x;
+}
+
 static inline uint64_t mul_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   assert(x < p);
   assert(y < p);
@@ -249,7 +255,7 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
       jk_sums[jk_pos(j, k, m)] =
-        ((uint128_t)jk_pairs[jk_pos(j, k, m)] + jk_pairs[jk_pos(k, j, m)]) % p;
+        add_mod_u64(jk_pairs[jk_pos(j, k, m)], jk_pairs[jk_pos(k, j, m)], p);
   }
   ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
@@ -363,8 +369,7 @@ static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *
       const size_t pos = jk_pos(exps[j], exps[k], m);
       uint64_t t = ctx->jk_prod_M[pos];
 
-      acc = acc + t;
-      if (acc >= p) acc -= p;
+      acc = add_mod_u64(acc, t, p);
 
       if (k < dim) {
         A[j*dim + k] = (t == 0) ? 0 : p - t;
@@ -430,8 +435,7 @@ int main(int argc, char **argv) {
       create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(ctx, vec, m);
       uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
-      acc = acc + f_n;
-      if (acc >= p) acc -= p;
+      acc = add_mod_u64(acc, f_n, p);
     }
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
