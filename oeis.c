@@ -131,6 +131,30 @@ void mss_iter_new(mss_iter_t *const it, size_t n, size_t r, size_t *vec, size_t 
   memset(scratch, 0, n*sizeof(size_t));
 }
 
+size_t mss_iter_size(mss_iter_t *const it) {
+  size_t m = it->n, n = it->tot+1;
+  uint128_t numerator = 1;
+  uint128_t denominator = 1;
+  for (size_t i = 1; i < m; ++i) {
+    int num = i + n - 1;
+    int den = i;
+    //greedily simplify the new terms
+    if (num % den == 0) {
+      numerator *= num/den;
+    }
+    else {
+      numerator *= num;
+      denominator *= den;
+    }
+    //greedily simplify the totals
+    if (numerator % denominator == 0) {
+      numerator = numerator / denominator;
+      denominator = 1;
+    }
+  }
+  return numerator / denominator;
+}
+
 bool mss_iter(mss_iter_t *restrict it) {
   if (it->fin) return false;
 
@@ -431,7 +455,9 @@ int main(int argc, char **argv) {
     uint64_t exps[n], acc = 0;
     mss_iter_t it;
     mss_iter_new(&it, m, n-1, vec, scratch);
-    while (mss_iter(&it)) {
+    const uint64_t mss_siz = mss_iter_size(&it);
+    for (size_t j = 0; j < mss_siz; ++j) {
+      assert(mss_iter(&it));
       create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(ctx, vec, m);
       uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
