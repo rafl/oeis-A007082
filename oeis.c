@@ -12,6 +12,8 @@
 #include <assert.h>
 #include <math.h>
 #include <stdlib.h>
+#include <time.h>
+#include <omp.h>
 
 typedef unsigned __int128 uint128_t;
 
@@ -354,6 +356,52 @@ uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   return det;
 }
 
+uint64_t f_opt(uint64_t *exps, prim_ctx_t *ctx) {
+  uint64_t fst_term = 1;
+  uint64_t *det_prods = malloc((ctx->n - 1)*2*sizeof(uint64_t));
+  uint64_t *main_diag = malloc((ctx->n - 1)*sizeof(uint64_t));
+  for (size_t i = 0; i < ctx->n - 1; ++i) {
+    det_prods[i] = 1;
+    det_prods[ctx->n - 1 + i] = -1;
+    main_diag[i] = 0;
+  }
+  for (size_t j = 0; j < ctx->n; ++j) {
+    for (size_t k = j + 1; k < ctx->n; ++k) {
+      uint64_t jk_sum = ctx->jk_sums[jk_pos(exps[j], exps[k], ctx->m)];
+      uint64_t jk_sum_inv = ctx->jk_sum_inverses[jk_pos(exps[j], exps[k], ctx->m)];
+      uint64_t jk_pair = ctx->jk_sums[jk_pos(exps[j], exps[k], ctx->m)];
+      uint64_t kj_sum_inv = ctx->jk_sum_inverses[jk_pos(exps[k], exps[j], ctx->m)];
+      uint64_t kj_pair = ctx->jk_sums[jk_pos(exps[k], exps[j], ctx->m)];
+      
+      if (jk_sum >= ctx->p) jk_sum -= ctx->p;
+      if (jk_sum_inv >= ctx->p) jk_sum_inv -= ctx->p;
+      if (kj_sum_inv >= ctx->p) kj_sum_inv -= ctx->p;
+      
+      main_diag[j] += mul_mod_u64(jk_pair, jk_sum_inv, ctx->p);
+      main_diag[j] += mul_mod_u64(kj_pair, kj_sum_inv, ctx->p);
+      
+      uint64_t cell = mul_mod_u64(-1 * jk_pair, jk_sum_inv, ctx->p);
+      uint64_t posIndex = (j + k) % (ctx->n - 1);
+      uint64_t negIndex = ctx->n - 2 - ((j + k) % (ctx->n - 1));
+      det_prods[posIndex] = mul_mod_u64(det_prods[posIndex], cell, ctx->p);
+      det_prods[negIndex] = mul_mod_u64(det_prods[negIndex], cell, ctx->p);
+
+      fst_term = mul_mod_u64(fst_term, jk_sum, ctx->p);
+    }
+  }
+  for (size_t i = 0; i < ctx->n - 1; ++i) {
+    det_prods[0] = mul_mod_u64(det_prods[0], main_diag[i], ctx->p);
+    uint64_t negIndex = ctx->n - 2 - ((2*i) % (ctx->n - 1));
+    det_prods[negIndex] = mul_mod_u64(det_prods[negIndex], main_diag[i], ctx->p);
+  }
+  uint64_t snd_term = 0;
+  for (size_t i = 0; i < ctx->n - 1; ++i) {
+    uint64_t combo = det_prods[i] + det_prods[ctx->n - 1 + i];
+    snd_term += combo;
+  }
+  return mul_mod_u64(fst_term, snd_term, ctx->p);
+}
+
 uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   uint64_t acc = 1;
   for (size_t j = 0; j < ctx->n; ++j) {
@@ -399,7 +447,8 @@ uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
 }
 
 uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
+  f_opt(exps, ctx);
+  //return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
 }
 
 int main(int argc, char **argv) {
@@ -425,18 +474,23 @@ int main(int argc, char **argv) {
   mpz_inits(X, M, u, inv, mz, rz, NULL);
   mpz_set_ui(X, 0);
   mpz_set_ui(M, 1);
+  
+  clock_t start = clock(), diff;
+  uint64_t progress_pct, progress_remaining;
 
   #pragma omp parallel for
   for (size_t i = 0; i < np; ++i) {
+    int tid = omp_get_thread_num();
     uint64_t p = ps[i];
-    printf("p = %"PRIu64"\n", p);
+    printf("\nThread %i: p = %"PRIu64"\n", tid, p);
 
     uint64_t w = mth_root_mod_p(p, m);
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
     uint64_t mss_100pct = mss_total(n, m);
-    uint64_t mss_1pct = mss_100pct / 100;
-    printf("# iterations per prime = %"PRIu64"\n", mss_100pct);
+    uint64_t mss_1pct = floor(mss_100pct / 100);
+    uint64_t mss_point1pct = floor(mss_100pct / 1000);
+    printf("# iterations per prime = %"PRIu64" (%"PRIu64")\n", mss_100pct, mss_point1pct);
     uint64_t counter = 0;
     
     size_t vec[m], scratch[m];
@@ -446,17 +500,20 @@ int main(int argc, char **argv) {
     while (mss_iter(&it)) {
       create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(p, vec, m);
-      uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
+      uint64_t f_n = mul_mod_u64(coeff, f_opt(exps, ctx), p);
       acc = acc + f_n;
       if (acc >= p) acc -= p;
-      ++counter;
-      if (counter % mss1pct == 0) {
-        printf("\rProgress: %"PRIu64"%% complete\r", ((100 * counter) / mss_100pct));
+      if (tid <= 1 && (counter % mss_point1pct) < 100) {
+        diff = (clock() - start) / CLOCKS_PER_SEC;
+        progress_pct = (counter / mss_point1pct);
+        progress_remaining = (1000 - progress_pct) * diff / progress_pct;
+        printf("\rProgress: %"PRIu64".%"PRIu64"%% complete, %"PRIu64":%02"PRIu64":%02"PRIu64" remaining\r", progress_pct / 10, progress_pct % 10, progress_remaining / 3600, (progress_remaining % 3600) / 60, progress_remaining % 60);
       }
+      ++counter;
     }
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("\n%"PRIu64" %% %"PRIu64"\n", ret, p);
-    printf("Final counter:  %"PRIu64"\n", counter);
+    // printf("Final counter:  %"PRIu64"\n", counter);
 
     mpz_set_ui(rz, ret);
     mpz_set_ui(mz, p);
