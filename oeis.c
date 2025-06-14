@@ -354,6 +354,7 @@ uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
     }
 
     // eh whatever it's only like 20ish of these
+    // TODO: check to see if maybe we can compute some inverses outside of montgomery space upfront?
     uint64_t inv_pivot = mont_mul(inv_mod_u64(mont_mul(A[k*dim + k], 1, p, p_dash), p), r2, p, p_dash);
     det = mont_mul(det, A[k*dim + k], p, p_dash);
 
@@ -439,7 +440,12 @@ void *progress(void *_ud) {
     fprintf(stderr, "\r%5.2f%%", pct);
     if (d >= tot) break;
     struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
+#if __APPLE__
+#  define _CLOCK CLOCK_REALTIME
+#else
+#  define _CLOCK CLOCK_MONOTONIC
+#endif
+    clock_gettime(_CLOCK, &ts);
     ts.tv_sec += 1;
     pthread_cond_timedwait(&ud->cv, &ud->mu, &ts);
   }
@@ -487,12 +493,19 @@ int main(int argc, char **argv) {
     mss_iter_new(&it, m, n-1, vec, scratch);
     size_t mss_siz = mss_iter_size(&it);
     _Atomic size_t done = 0;
-    progress_t st = { .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER };
+    progress_t st = {
+       .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER
+#if __APPLE__
+       , .cv = PTHREAD_COND_INITIALIZER
+#endif
+    };
+#if !__APPLE__
     pthread_condattr_t ca;
     pthread_condattr_init(&ca);
     pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
     pthread_cond_init(&st.cv, &ca);
     pthread_condattr_destroy(&ca);
+#endif
     pthread_t prog;
     pthread_create(&prog, NULL, progress, &st);
     #pragma omp parallel
