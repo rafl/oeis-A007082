@@ -213,7 +213,7 @@ void create_exps(size_t *ms, size_t len, uint64_t *dst) {
       dst[idx++] = exp;
   }
 
-  dst[idx] = 1;
+  dst[idx] = 0;
 }
 
 static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
