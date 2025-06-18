@@ -1,7 +1,11 @@
 #define DEBUG 1
-#if !DEBUG
+#if DEBUG
+#  define VERIFY(e) do { bool _verify_ok = !!(e); assert(_verify_ok); } while (0);
+#else
 #  define NDEBUG
+#  define VERIFY(e) ((void)(e))
 #endif
+
 
 #include <stdio.h>
 #include <stdint.h>
@@ -548,7 +552,7 @@ int main(int argc, char **argv) {
     mpz_sub(u, rz, u);
     mpz_mod(u, u, mz);
 
-    assert(mpz_invert(inv, M, mz) != 0);
+    VERIFY(mpz_invert(inv, M, mz) != 0);
 
     mpz_mul(u, u, inv);
     mpz_mod(u, u, mz);
