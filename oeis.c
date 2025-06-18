@@ -460,11 +460,33 @@ void *progress(void *_ud) {
   return NULL;
 }
 
-int main(int argc, char **argv) {
-  uint64_t n = 13;
+static uint64_t parse_uint(const char *s) {
+  char *e;
+  uint64_t n = strtoll(s, &e, 10);
+  if (s == e || *e != 0) {
+    fprintf(stderr, "invalid uint: %s\n", s);
+    abort();
+  }
+  return n;
+}
 
-  if (argc > 1) {
-    n = atoll(argv[1]);
+#define P_STRIDE (1ULL << 10)
+
+int main(int argc, char **argv) {
+  uint64_t n = 13, m_id = 0;
+
+  for (;;) {
+    int c = getopt(argc, argv, "m:");
+    if (c == -1) break;
+
+    switch (c) {
+      case 'm': m_id = parse_uint(optarg); break;
+    }
+  }
+  assert(m_id < P_STRIDE);
+
+  if (argc > optind) {
+    n = parse_uint(argv[optind]);
   }
 
   uint64_t m = m_for(n);
@@ -472,10 +494,14 @@ int main(int argc, char **argv) {
 
   size_t np = primes_needed(n);
   uint64_t ps[np];
-  uint64_t p_base = 1ULL << (PRIME_BITS-1);
+  uint64_t stride = P_STRIDE*m;
+  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
+  assert((p_base % m) == 1);
+  assert(p_base < (1ULL << 63));
   for (size_t i = 0; i < np; ++i) {
     ps[i] = prime_congruent_1_mod_m(p_base, m);
-    p_base = ps[i]+1;
+    p_base = ps[i]+stride;
+    assert(ps[i] < (1ULL << 63));
   }
 
   mpz_t X, M, Xp, Mp, u, inv, mz, rz;
