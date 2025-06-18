@@ -1,9 +1,11 @@
 #define DEBUG 1
 #if DEBUG
 #  define VERIFY(e) do { bool _verify_ok = !!(e); assert(_verify_ok); } while (0);
+#  define DEBUG_ARG
 #else
 #  define NDEBUG
 #  define VERIFY(e) ((void)(e))
+#  define DEBUG_ARG __attribute__((unused))
 #endif
 
 
@@ -78,7 +80,7 @@ uint64_t prime_congruent_1_mod_m(uint64_t start, uint64_t m) {
   }
 }
 
-static int factor_u64(uint64_t m, uint64_t *pf, size_t pfs, size_t *pcnt) {
+static int factor_u64(uint64_t m, uint64_t *pf, DEBUG_ARG size_t pfs, size_t *pcnt) {
   size_t k = 0;
   for (uint64_t d = 2; d * d <= m; ++d) {
     if (m % d == 0) {
