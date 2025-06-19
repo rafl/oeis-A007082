@@ -460,6 +460,54 @@ void *progress(void *_ud) {
   return NULL;
 }
 
+typedef struct { mpz_t X, M; } comb_ctx_t;
+
+static comb_ctx_t *comb_ctx_new() {
+  comb_ctx_t *ctx = malloc(sizeof(comb_ctx_t));
+  mpz_inits(ctx->X, ctx->M, NULL);
+  mpz_set_ui(ctx->X, 0);
+  mpz_set_ui(ctx->M, 1);
+  return ctx;
+}
+
+static void comb_ctx_free(comb_ctx_t *ctx) {
+  mpz_clears(ctx->X, ctx->M, NULL);
+}
+
+static bool comb_ctx_add(comb_ctx_t *ctx, uint64_t res, uint64_t p) {
+  mpz_t u, inv, mz, rz, Xp;
+  mpz_inits(u, inv, mz, rz, Xp, NULL);
+
+  mpz_set(Xp, ctx->X);
+
+  mpz_set_ui(rz, res);
+  mpz_set_ui(mz, p);
+
+  mpz_mod(u, ctx->X, mz);
+  mpz_sub(u, rz, u);
+  mpz_mod(u, u, mz);
+
+  VERIFY(mpz_invert(inv, ctx->M, mz) != 0);
+
+  mpz_mul(u, u, inv);
+  mpz_mod(u, u, mz);
+  mpz_mul(inv, ctx->M, u);
+  mpz_add(ctx->X, ctx->X, inv);
+  mpz_mul(ctx->M, ctx->M, mz);
+
+  bool ret = mpz_cmp(ctx->X, Xp) == 0;
+  mpz_clears(u, inv, mz, rz, NULL);
+  return ret;
+}
+
+typedef enum {
+  MODE_NONE = 0,
+  MODE_PROCESS = (1 << 0),
+  MODE_COMBINE = (1 << 1),
+  MODE_BOTH = MODE_PROCESS|MODE_COMBINE,
+  MODE_LAST = MODE_BOTH+1,
+} prog_mode_t;
+
 static uint64_t parse_uint(const char *s) {
   char *e;
   uint64_t n = strtoll(s, &e, 10);
@@ -474,20 +522,24 @@ static uint64_t parse_uint(const char *s) {
 
 int main(int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
+  prog_mode_t mode = MODE_NONE;
 
   for (;;) {
-    int c = getopt(argc, argv, "m:");
+    int c = getopt(argc, argv, "m:pc");
     if (c == -1) break;
 
     switch (c) {
       case 'm': m_id = parse_uint(optarg); break;
+      case 'p': mode |= MODE_PROCESS; break;
+      case 'c': mode |= MODE_COMBINE; break;
     }
   }
   assert(m_id < P_STRIDE);
+  assert(mode < MODE_LAST);
+  if (mode == MODE_NONE) mode = MODE_BOTH;
 
-  if (argc > optind) {
+  if (argc > optind)
     n = parse_uint(argv[optind]);
-  }
 
   uint64_t m = m_for(n);
   printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
@@ -504,17 +556,13 @@ int main(int argc, char **argv) {
     assert(ps[i] < (1ULL << 63));
   }
 
-  mpz_t X, M, Xp, Mp, u, inv, mz, rz;
-  mpz_inits(X, M, Xp, Mp, u, inv, mz, rz, NULL);
-  mpz_set_ui(X, 0);
-  mpz_set_ui(M, 1);
+  comb_ctx_t *crt = NULL;
+  if (mode & MODE_COMBINE)
+    crt = comb_ctx_new();
   bool converged = false;
 
   for (size_t i = 0; i < np; ++i) {
     uint64_t p = ps[i];
-
-    mpz_set(Xp, X);
-    mpz_set(Mp, M);
 
     uint64_t w = mth_root_mod_p(p, m);
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
@@ -573,37 +621,23 @@ int main(int argc, char **argv) {
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
 
-    mpz_set_ui(rz, ret);
-    mpz_set_ui(mz, p);
-
-    mpz_mod(u, X, mz);
-    mpz_sub(u, rz, u);
-    mpz_mod(u, u, mz);
-
-    VERIFY(mpz_invert(inv, M, mz) != 0);
-
-    mpz_mul(u, u, inv);
-    mpz_mod(u, u, mz);
-    mpz_mul(inv, M, u);
-    mpz_add(X, X, inv);
-    mpz_mul(M, M, mz);
-
     prim_ctx_free(ctx);
 
-    if (i > 0) {
-      if (mpz_cmp(X, Xp) == 0) {
-        converged = true;
-        gmp_printf("\ne(%d) = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
-        break;
-      } else
-        gmp_printf("e(%d) >= %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
+    if (mode & MODE_COMBINE) {
+      converged = comb_ctx_add(crt, ret, p);
+      if (i == 0) continue;
+
+      gmp_printf("e(%d) %s %Zd\n  after %zu primes, mod %Zd\n",
+                 n, converged ? "=" : ">=", crt->X, i + 1, crt->M);
+      if (converged) break;
     }
   }
 
-  if (!converged)
-    gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", X, M);
+  if (mode & MODE_COMBINE && !converged)
+    gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", crt->X, crt->M);
 
-  mpz_clears(X, M, Xp, Mp, u, inv, mz, rz, NULL);
+  if (mode & MODE_COMBINE)
+    comb_ctx_free(crt);
 
   return 0;
 }
