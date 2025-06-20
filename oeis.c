@@ -518,9 +518,145 @@ static uint64_t parse_uint(const char *s) {
   return n;
 }
 
+typedef struct source_St {
+  int  (*next)(struct source_St *, uint64_t *res, uint64_t *p);
+  void (*destroy)(struct source_St *);
+  void *state;
+} source_t;
+
+static int stdin_next(source_t *, uint64_t *res, uint64_t *p) {
+  return scanf("%" SCNu64 " %% %" SCNu64, res, p) == 2;
+}
+
+static void stdin_destroy(source_t *src) {
+  free(src);
+}
+
+source_t *source_stdin_new(void) {
+  source_t *src = malloc(sizeof *src);
+  *src = (source_t){ .next = stdin_next, .destroy = stdin_destroy, .state = NULL };
+  return src;
+}
+
+typedef struct {
+  uint64_t n, m, *ps;
+  size_t idx, np;
+} proc_state_t;
+
+static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
+  uint64_t w = mth_root_mod_p(p, m);
+  prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+
+  size_t vec[m], scratch[m];
+  mss_iter_t it;
+  mss_iter_new(&it, m, n - 1, vec, scratch);
+  const size_t mss_siz = mss_iter_size(&it);
+
+  _Atomic size_t done = 0;
+  progress_t st = {
+    .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER,
+#if __APPLE__
+    .cv = PTHREAD_COND_INITIALIZER
+#endif
+  };
+#if !__APPLE__
+  pthread_condattr_t ca;
+  pthread_condattr_init(&ca);
+  pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+  pthread_cond_init(&st.cv, &ca);
+  pthread_condattr_destroy(&ca);
+#endif
+  pthread_t prog;
+  pthread_create(&prog, NULL, progress, &st);
+
+  uint64_t acc = 0;
+  #pragma omp parallel
+  {
+    #define CHUNK 64
+    size_t buf[CHUNK][m];
+    uint64_t exps[n], l_acc = 0;
+
+    for (;;) {
+      size_t got = 0;
+      #pragma omp critical
+      {
+        while (got < CHUNK && mss_iter(&it)) {
+          memcpy(buf[got], vec, m * sizeof(size_t));
+          ++got;
+        }
+        atomic_fetch_add_explicit(&done, got, memory_order_relaxed);
+      }
+      if (!got) break;
+
+      for (size_t c = 0; c < got; ++c) {
+        create_exps(buf[c], m, exps);
+        uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
+        uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
+        l_acc = add_mod_u64(l_acc, f_n, p);
+      }
+    }
+    #pragma omp critical
+    acc = add_mod_u64(acc, l_acc, p);
+  }
+
+  pthread_mutex_lock(&st.mu);
+  st.quit = true;
+  pthread_cond_signal(&st.cv);
+  pthread_mutex_unlock(&st.mu);
+  pthread_join(prog, NULL);
+
+  prim_ctx_free(ctx);
+  uint64_t denom = pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p);
+  return mul_mod_u64(acc, denom, p);
+}
+
+static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
+  proc_state_t *st = self->state;
+  if (st->idx == st->np) return 0;
+
+  *p = st->ps[st->idx++];
+  *res = residue_for_prime(st->n, st->m, *p);
+  printf("%" PRIu64 " %% %" PRIu64 "\n", *res, *p);
+  return 1;
+}
+
+static void proc_destroy(source_t *self) {
+  proc_state_t *st = self->state;
+  free(st->ps);
+  free(st);
+  free(self);
+}
+
 #define P_STRIDE (1ULL << 10)
 
-int main(int argc, char **argv) {
+static uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t *out_np) {
+  size_t np = primes_needed(n);
+  uint64_t *ps = malloc(np * sizeof(*ps));
+
+  uint64_t stride = P_STRIDE*m;
+  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
+  for (size_t i = 0; i < np; ++i) {
+    ps[i]  = prime_congruent_1_mod_m(p_base, m);
+    p_base = ps[i] + stride;
+  }
+  *out_np = np;
+  return ps;
+}
+
+source_t *source_process_new(uint64_t n, uint64_t m_id) {
+  uint64_t m = m_for(n);
+  size_t np;
+  uint64_t *ps = build_prime_list(n, m, m_id, &np);
+
+  proc_state_t *st = malloc(sizeof(*st));
+  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps };
+
+  source_t *src = malloc(sizeof *src);
+  *src = (source_t){ .next = proc_next, .destroy = proc_destroy, .state = st };
+  return src;
+}
+
+int main (int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
 
@@ -541,103 +677,31 @@ int main(int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  uint64_t m = m_for(n);
-  printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
+  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id) : source_stdin_new();
+  comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
-  size_t np = primes_needed(n);
-  uint64_t ps[np];
-  uint64_t stride = P_STRIDE*m;
-  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
-  assert((p_base % m) == 1);
-  assert(p_base < (1ULL << 63));
-  for (size_t i = 0; i < np; ++i) {
-    ps[i] = prime_congruent_1_mod_m(p_base, m);
-    p_base = ps[i]+stride;
-    assert(ps[i] < (1ULL << 63));
-  }
-
-  comb_ctx_t *crt = NULL;
-  if (mode & MODE_COMBINE)
-    crt = comb_ctx_new();
   bool converged = false;
-
-  for (size_t i = 0; i < np; ++i) {
-    uint64_t p = ps[i];
-
-    uint64_t w = mth_root_mod_p(p, m);
-    prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
-
-    size_t vec[m], scratch[m];
-    uint64_t acc = 0;
-    mss_iter_t it;
-    mss_iter_new(&it, m, n-1, vec, scratch);
-    size_t mss_siz = mss_iter_size(&it);
-    _Atomic size_t done = 0;
-    progress_t st = {
-       .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER
-#if __APPLE__
-       , .cv = PTHREAD_COND_INITIALIZER
-#endif
-    };
-#if !__APPLE__
-    pthread_condattr_t ca;
-    pthread_condattr_init(&ca);
-    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
-    pthread_cond_init(&st.cv, &ca);
-    pthread_condattr_destroy(&ca);
-#endif
-    pthread_t prog;
-    pthread_create(&prog, NULL, progress, &st);
-    #pragma omp parallel
-    {
-      #define CHUNK 64
-      size_t buf[CHUNK][m];
-      uint64_t l_exps[n], l_acc = 0;
-      for (;;) {
-        size_t got = 0;
-        #pragma omp critical
-        {
-          while (got < CHUNK && mss_iter(&it))
-            memcpy(buf[got++], vec, m*sizeof(size_t));
-          atomic_fetch_add_explicit(&done, got, memory_order_relaxed);
-        }
-        if (!got) break;
-
-        for (size_t c = 0; c < got; ++c) {
-          create_exps(buf[c], m, l_exps);
-          uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
-          uint64_t f_n = mul_mod_u64(coeff, f(l_exps, ctx), p);
-          l_acc = add_mod_u64(l_acc, f_n, p);
-        }
-      }
-      #pragma omp critical
-      acc = add_mod_u64(acc, l_acc, p);
-    }
-    pthread_mutex_lock(&st.mu);
-    st.quit = true;
-    pthread_cond_signal(&st.cv);
-    pthread_mutex_unlock(&st.mu);
-    pthread_join(prog, NULL);
-    uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
-    printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
-
-    prim_ctx_free(ctx);
-
+  size_t i = 0;
+  uint64_t res, p;
+  while (src->next(src, &res, &p) > 0) {
     if (mode & MODE_COMBINE) {
-      converged = comb_ctx_add(crt, ret, p);
-      if (i == 0) continue;
+      converged = comb_ctx_add(crt, res, p);
 
-      gmp_printf("e(%d) %s %Zd\n  after %zu primes, mod %Zd\n",
-                 n, converged ? "=" : ">=", crt->X, i + 1, crt->M);
-      if (converged) break;
+      if (i > 0) {
+        gmp_printf("e(%"PRIu64") %s %Zd\n  after %zu primes, mod %Zd\n",
+                   n, converged ? "=" : ">=", crt->X, i+1, crt->M);
+        if (converged) break;
+      }
+      ++i;
     }
   }
+  src->destroy(src);
 
-  if (mode & MODE_COMBINE && !converged)
-    gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", crt->X, crt->M);
-
-  if (mode & MODE_COMBINE)
+  if (mode & MODE_COMBINE) {
+    if (!converged)
+      gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", crt->X, crt->M);
     comb_ctx_free(crt);
+  }
 
   return 0;
 }
