@@ -605,6 +605,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   pthread_cond_signal(&st.cv);
   pthread_mutex_unlock(&st.mu);
   pthread_join(prog, NULL);
+  pthread_cond_destroy(&st.cv);
+  pthread_mutex_destroy(&st.mu);
 
   prim_ctx_free(ctx);
   uint64_t denom = pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p);
