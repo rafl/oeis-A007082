@@ -472,6 +472,7 @@ static comb_ctx_t *comb_ctx_new() {
 
 static void comb_ctx_free(comb_ctx_t *ctx) {
   mpz_clears(ctx->X, ctx->M, NULL);
+  free(ctx);
 }
 
 static bool comb_ctx_add(comb_ctx_t *ctx, uint64_t res, uint64_t p) {
