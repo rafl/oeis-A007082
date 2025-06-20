@@ -8,7 +8,6 @@
 #  define DEBUG_ARG __attribute__((unused))
 #endif
 
-
 #include <stdio.h>
 #include <stdint.h>
 #include <stdbool.h>
@@ -21,6 +20,7 @@
 #include <stdatomic.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <omp.h>
 
 typedef unsigned __int128 uint128_t;
 
@@ -140,8 +140,24 @@ void mss_iter_new(mss_iter_t *const it, size_t n, size_t r, size_t *vec, size_t 
   memset(scratch, 0, n*sizeof(size_t));
 }
 
-size_t mss_iter_size(mss_iter_t *const it) {
-  size_t m = it->n, n = it->tot+1;
+static inline void
+mss_iter_init_at(mss_iter_t *const it, size_t n, size_t r, size_t *vec, size_t *scratch)
+{
+  it->n = n;
+  it->tot = r;
+  it->vec = vec;
+  it->scratch = scratch;
+  it->lvl = 1;
+  it->fin = false;
+
+  size_t rem = 0;
+  for (size_t i = n; i-- > 0; ) {
+    rem += vec[i];
+    scratch[i] = rem;
+  }
+}
+
+size_t mss_iter_size(size_t m, size_t n) {
   uint128_t numerator = 1;
   uint128_t denominator = 1;
   for (size_t i = 1; i < m; ++i) {
@@ -245,6 +261,7 @@ static size_t primes_needed(uint64_t n) {
 
 typedef struct {
   uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *jk_sums_M;
+  size_t *binoms;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -312,15 +329,45 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
       ctx->jk_sums_M[pos] = mont_mul(jk_sums[pos], ctx->r2, p, ctx->p_dash);
     }
   }
+  size_t rows = (n-1) + m + 1, cols = m+1;
+  ctx->binoms = malloc(rows*cols*sizeof(size_t));
+  for (size_t j = 0; j < rows; ++j) {
+    for (size_t k = 0; k < cols; ++k) {
+      size_t v = (k == 0 || k == j) ? 1
+               : (k > j) ? 0
+               : ctx->binoms[(j-1)*cols + (k-1)] + ctx->binoms[(j-1)*cols + k];
+      ctx->binoms[j*cols + k] = v;
+    }
+  }
 
   return ctx;
 }
 
+static inline size_t binom_pos(size_t j, size_t k, size_t m) {
+  return j*(m+1) + k;
+}
+
 void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->binoms);
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
   free(ctx);
+}
+
+void composition_unrank(size_t *C, size_t rank, size_t m, size_t tot, size_t *vec) {
+  for (size_t i=0; i<m-1; ++i) {
+    size_t v = 0;
+    for (;;) {
+      size_t cnt = C[binom_pos(tot-v+m-i-2, m-i-2, m)];
+      if (rank < cnt) break;
+      rank -= cnt;
+      ++v;
+    }
+    vec[i] = v;
+    tot -= v;
+  }
+  vec[m-1] = tot;
 }
 
 uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
@@ -555,10 +602,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
-  size_t vec[m], scratch[m];
-  mss_iter_t it;
-  mss_iter_new(&it, m, n - 1, vec, scratch);
-  const size_t mss_siz = mss_iter_size(&it);
+  const size_t mss_siz = mss_iter_size(m, n);
 
   _Atomic size_t done = 0;
   progress_t st = {
@@ -581,29 +625,37 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   uint64_t acc = 0;
   #pragma omp parallel
   {
-    #define CHUNK 64
-    size_t buf[CHUNK][m];
     uint64_t exps[n], l_acc = 0;
+    size_t vec[m], scratch[m];
+    mss_iter_t it;
+    int tid = omp_get_thread_num(), nt = omp_get_num_threads();
+    size_t lo = (mss_siz * tid) / nt, hi = (mss_siz * (tid+1)) / nt;
 
-    for (;;) {
-      size_t got = 0;
-      #pragma omp critical
-      {
-        while (got < CHUNK && mss_iter(&it)) {
-          memcpy(buf[got], vec, m * sizeof(size_t));
-          ++got;
-        }
-        atomic_fetch_add_explicit(&done, got, memory_order_relaxed);
-      }
-      if (!got) break;
+    #define FLUSH (1 << 14)
+    size_t l_done = 0;
 
-      for (size_t c = 0; c < got; ++c) {
-        create_exps(buf[c], m, exps);
-        uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
-        uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
-        l_acc = add_mod_u64(l_acc, f_n, p);
+    composition_unrank(ctx->binoms, lo, m, n-1, vec);
+    mss_iter_init_at(&it, m, n-1, vec, scratch);
+
+    for (size_t r = lo; r < hi; ++r) {
+      create_exps(vec, m, exps);
+      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
+      uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
+      l_acc = add_mod_u64(l_acc, f_n, p);
+
+      if (++l_done == FLUSH) {
+        atomic_fetch_add_explicit(&done, FLUSH, memory_order_relaxed);
+        l_done = 0;
       }
+
+      //if (r + 1 < hi)
+      //  VERIFY(mss_iter(&it));
+      mss_iter(&it);
     }
+
+    if (l_done)
+      atomic_fetch_add_explicit(&done, l_done, memory_order_relaxed);
+
     #pragma omp critical
     acc = add_mod_u64(acc, l_acc, p);
   }
