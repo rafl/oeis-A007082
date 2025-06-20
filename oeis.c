@@ -432,7 +432,14 @@ typedef struct {
   bool quit;
   pthread_cond_t cv;
   pthread_mutex_t mu;
+  struct timespec start;
 } progress_t;
+
+#if __APPLE__
+#  define _CLOCK CLOCK_REALTIME
+#else
+#  define _CLOCK CLOCK_MONOTONIC
+#endif
 
 void *progress(void *_ud) {
   progress_t *ud = _ud;
@@ -443,17 +450,17 @@ void *progress(void *_ud) {
   while (!ud->quit) {
     size_t d = atomic_load_explicit(done, memory_order_relaxed);
     double pct = 100.0 * d / tot;
-    fprintf(stderr, "\r%5.2f%%", pct);
+    struct timespec now;
+    clock_gettime(_CLOCK, &now);
+    double elapsed = (now.tv_sec - ud->start.tv_sec) + (now.tv_nsec - ud->start.tv_nsec)*1e-9;
+    double eta = (d && d < tot) ? elapsed * (tot - d) / d : 0.0;
+    int eh = elapsed / 3600, es = (int)elapsed % 60, em = ((int)elapsed / 60) % 60;
+    int th = (eta / 3600), ts = (int)eta % 60, tm = ((int)eta / 60) % 60;
+    fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | ETA %02d:%02d:%02d",
+            pct, eh, em, es, th, tm, ts);
     if (d >= tot) break;
-    struct timespec ts;
-#if __APPLE__
-#  define _CLOCK CLOCK_REALTIME
-#else
-#  define _CLOCK CLOCK_MONOTONIC
-#endif
-    clock_gettime(_CLOCK, &ts);
-    ts.tv_sec += 1;
-    pthread_cond_timedwait(&ud->cv, &ud->mu, &ts);
+    now.tv_sec += 1;
+    pthread_cond_timedwait(&ud->cv, &ud->mu, &now);
   }
   pthread_mutex_unlock(&ud->mu);
   fprintf(stderr, "\r");
@@ -526,7 +533,7 @@ typedef struct source_St {
 } source_t;
 
 static int stdin_next(source_t *, uint64_t *res, uint64_t *p) {
-  return scanf("%" SCNu64 " %% %" SCNu64, res, p) == 2;
+  return scanf("%"SCNu64" %% %"SCNu64, res, p) == 2;
 }
 
 static void stdin_destroy(source_t *src) {
@@ -560,6 +567,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     .cv = PTHREAD_COND_INITIALIZER
 #endif
   };
+  clock_gettime(_CLOCK, &st.start);
 #if !__APPLE__
   pthread_condattr_t ca;
   pthread_condattr_init(&ca);
