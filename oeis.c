@@ -510,7 +510,7 @@ typedef enum {
 
 static uint64_t parse_uint(const char *s) {
   char *e;
-  uint64_t n = strtoll(s, &e, 10);
+  uint64_t n = strtoull(s, &e, 10);
   if (s == e || *e != 0) {
     fprintf(stderr, "invalid uint: %s\n", s);
     abort();
