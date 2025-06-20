@@ -496,7 +496,7 @@ static bool comb_ctx_add(comb_ctx_t *ctx, uint64_t res, uint64_t p) {
   mpz_mul(ctx->M, ctx->M, mz);
 
   bool ret = mpz_cmp(ctx->X, Xp) == 0;
-  mpz_clears(u, inv, mz, rz, NULL);
+  mpz_clears(u, inv, mz, rz, Xp, NULL);
   return ret;
 }
 
