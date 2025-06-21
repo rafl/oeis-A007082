@@ -699,7 +699,7 @@ static uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t 
   uint64_t stride = P_STRIDE*m;
   uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
   for (size_t i = 0; i < np; ++i) {
-    ps[i]  = prime_congruent_1_mod_m(p_base, m);
+    ps[i] = prime_congruent_1_mod_m(p_base, m);
     p_base = ps[i] + stride;
   }
   *out_np = np;
