@@ -260,7 +260,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *jk_sums_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M;
   size_t *binoms;
 } prim_ctx_t;
 
@@ -307,14 +307,16 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
       jk_sums[jk_pos(j, k, m)] =
         add_mod_u64(jk_pairs[jk_pos(j, k, m)], jk_pairs[jk_pos(k, j, m)], p);
   }
-  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_prod = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
-      uint64_t t = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
-      ctx->jk_prod_M[pos] = mont_mul(t, ctx->r2, p, ctx->p_dash);
+      ctx->jk_prod[pos] = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
     }
   }
+  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  for (size_t i = 0; i < m*m; ++i)
+    ctx->jk_prod_M[i] = mont_mul(ctx->jk_prod[i], ctx->r2, p, ctx->p_dash);
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
   // nat_M[0] is intentionally uninitialised to maximise developer engagement
   // when that inevitably backfires. index is off by one to avoid extra maths
@@ -352,6 +354,7 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
+  free(ctx->jk_prod);
   free(ctx);
 }
 
@@ -461,7 +464,7 @@ static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *
   }
 }
 
-uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
+uint64_t f_snd_trm(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
   size_t dim = ctx->n-1;
   uint64_t A[dim*dim];
 
@@ -469,8 +472,113 @@ uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
   return mont_mul(det_mod_p(A, dim, ctx), 1, ctx->p, ctx->p_dash);
 }
 
-uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
+static inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
+  return (x >= y) ? x - y : x + p - y;
+}
+
+// TODO: move back into montgomery domain?
+uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  size_t c[m];
+  // TODO: avoid copy? could adjust vec representation or handle vec[0] special below
+  memcpy(c, vec, m*sizeof(size_t));
+  ++c[0];
+
+  // active groups
+  size_t typ[m], r = 0, del_i = (size_t)-1;
+  for (size_t i = 0; i < m; ++i) {
+    if (c[i]) {
+      typ[r] = i;
+      // delete first non-empty
+      if (del_i == (size_t)-1)
+        del_i = i;
+      ++r;
+    }
+  }
+  const uint64_t c_del = c[del_i];
+
+  uint64_t prod_int = 1;
+  for (size_t a = 0; a < r; ++a) {
+    size_t i = typ[a];
+    uint64_t sum = 0;
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+      uint64_t w = ctx->jk_prod[jk_pos(i, j, m)];
+      sum = add_mod_u64(sum, mul_mod_u64(c[j], w, p), p);
+    }
+    uint64_t d_i = sub_mod_u64(sum, ctx->jk_prod[jk_pos(i, i, m)], p);
+    uint64_t lam_i = add_mod_u64(d_i, ctx->jk_prod[jk_pos(i, i, m)], p);
+
+    if (c[i] > 1)
+      prod_int = mul_mod_u64(prod_int, pow_mod_u64(lam_i, c[i] - 1, p), p);
+  }
+
+  // quotient minor
+  size_t dim = r - 1;
+  uint64_t A[dim ? dim*dim : 1];
+
+  if (dim) {
+    size_t row = 0;
+    for (size_t a = 0; a < r; ++a) {
+      size_t i = typ[a];
+      if (i == del_i) continue;
+
+      uint64_t diag = 0;
+      size_t col  = 0;
+
+      // contribution from the deleted block
+      uint64_t w_del = ctx->jk_prod[jk_pos(i, del_i, m)];
+      uint64_t val = mul_mod_u64(c[del_i], w_del, p);
+      diag = add_mod_u64(diag, val, p);
+
+      // remaining off-diagonal blocks
+      for (size_t b = 0; b < r; ++b) {
+        size_t j = typ[b];
+        if (j == del_i)
+          continue;
+
+        if (j == i)
+          continue;
+
+        if (col == row)
+          ++col;
+
+        uint64_t w  = ctx->jk_prod[jk_pos(i, j, m)];
+        uint64_t v  = mul_mod_u64(c[j], w, p);
+
+        A[row*dim + col] = v ? p - v : 0;
+        diag = add_mod_u64(diag, v, p);
+        ++col;
+      }
+
+      A[row*dim + row] = diag;
+      ++row;
+    }
+  }
+  for (size_t i = 0; i < dim*dim; ++i)
+    A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
+  uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
+  det_q = mul_mod_u64(det_q, inv_mod_u64(c_del, p), p);
+  return mul_mod_u64(prod_int, det_q, p);
+}
+
+uint64_t f_snd_trm_cmp(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+  uint64_t slow = f_snd_trm(vec, exps, ctx);
+  uint64_t fast = f_snd_trm_fast(vec, exps, ctx);
+
+  if (fast != slow) {
+    print_vec(vec, ctx->m);
+    print_vec(exps, ctx->n);
+    printf("got %"PRIu64", wanted %"PRIu64" (mod %"PRIu64")\n\n", fast, slow, ctx->p);
+    abort();
+  }
+
+  return slow;
+}
+
+uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm_fast(vec, exps, ctx), ctx->p);
 }
 
 typedef struct {
@@ -640,7 +748,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     for (size_t r = lo; r < hi; ++r) {
       create_exps(vec, m, exps);
       uint64_t coeff = multinomial_mod_p(ctx, vec, m);
-      uint64_t f_n = mul_mod_u64(coeff, f(exps, ctx), p);
+      uint64_t f_n = mul_mod_u64(coeff, f(vec, exps, ctx), p);
       l_acc = add_mod_u64(l_acc, f_n, p);
 
       if (++l_done == FLUSH) {
