@@ -730,39 +730,37 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   pthread_t prog;
   pthread_create(&prog, NULL, progress, &st);
 
+  _Atomic size_t next_rank = 0;
+
   uint64_t acc = 0;
   #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
     size_t vec[m], scratch[m];
     mss_iter_t it;
-    int tid = omp_get_thread_num(), nt = omp_get_num_threads();
-    size_t lo = (mss_siz * tid) / nt, hi = (mss_siz * (tid+1)) / nt;
 
-    #define FLUSH (1 << 14)
-    size_t l_done = 0;
+    #define CHUNK 1024
+    size_t base;
+    while ((base = atomic_fetch_add_explicit(&next_rank, CHUNK, memory_order_relaxed)) < mss_siz) {
+      size_t lim = base+CHUNK;
+      if (lim > mss_siz) lim = mss_siz;
 
-    composition_unrank(ctx->binoms, lo, m, n-1, vec);
-    mss_iter_init_at(&it, m, n-1, vec, scratch);
+      composition_unrank(ctx->binoms, base, m, n-1, vec);
+      mss_iter_init_at(&it, m, n-1, vec, scratch);
 
-    for (size_t r = lo; r < hi; ++r) {
-      create_exps(vec, m, exps);
-      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
-      uint64_t f_n = mul_mod_u64(coeff, f(vec, exps, ctx), p);
-      l_acc = add_mod_u64(l_acc, f_n, p);
+      for (size_t r = base; r < lim; ++r) {
+        create_exps(vec, m, exps);
+        uint64_t coeff = multinomial_mod_p(ctx, vec, m);
+        uint64_t f_n = mul_mod_u64(coeff, f(vec, exps, ctx), p);
+        l_acc = add_mod_u64(l_acc, f_n, p);
 
-      if (++l_done == FLUSH) {
-        atomic_fetch_add_explicit(&done, FLUSH, memory_order_relaxed);
-        l_done = 0;
+        //if (r + 1 < lim)
+        //  VERIFY(mss_iter(&it));
+        mss_iter(&it);
       }
 
-      //if (r + 1 < hi)
-      //  VERIFY(mss_iter(&it));
-      mss_iter(&it);
+      atomic_fetch_add_explicit(&done, lim-base, memory_order_relaxed);
     }
-
-    if (l_done)
-      atomic_fetch_add_explicit(&done, l_done, memory_order_relaxed);
 
     #pragma omp critical
     acc = add_mod_u64(acc, l_acc, p);
