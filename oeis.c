@@ -852,7 +852,7 @@ int main (int argc, char **argv) {
       if (i > 0) {
         gmp_printf("e(%"PRIu64") %s %Zd\n  after %zu primes, mod %Zd\n",
                    n, converged ? "=" : ">=", crt->X, i+1, crt->M);
-        if (converged) break;
+        if (converged && mode & MODE_PROCESS) break;
       }
       ++i;
     }
