@@ -213,7 +213,7 @@ void create_exps(size_t *ms, size_t len, uint64_t *dst) {
       dst[idx++] = exp;
   }
 
-  dst[idx] = 1;
+  dst[idx] = 0;
 }
 
 static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
@@ -238,7 +238,7 @@ static size_t primes_needed(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *jk_sums_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod_neg_M, *jk_prod, *jk_prod_neg, *nat_M, *jk_sums_M, *ws, div2, *jk_sums;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -264,12 +264,16 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   ctx->p_dash = (uint64_t)(0 - inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
+  ctx->div2 = inv_mod_u64(2, ctx->p);
 
   // TODO: move all of the locals into M-space for neatness. wouldn't really
   // affect total run-time cause it's all per-prime only.
   uint64_t ws[m];
-  for (size_t i = 0; i < m; ++i)
+  ctx->ws = malloc(m*sizeof(uint64_t));
+  for (size_t i = 0; i < m; ++i) {
     ws[i] = pow_mod_u64(w, i, p);
+    ctx->ws[i] = ws[i];
+  }
   uint64_t ws_inv[m];
   for (size_t i = 0; i < m; ++i)
     ws_inv[i] = inv_mod_u64(ws[i], p);
@@ -278,18 +282,45 @@ prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
     for (size_t k = 0; k < m; ++k)
       jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ws[j], ws_inv[k], p);
   }
+  ctx->jk_sums = malloc(m*m*sizeof(uint64_t));
   uint64_t jk_sums[m*m];
   for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k)
+    for (size_t k = 0; k < m; ++k) {
       jk_sums[jk_pos(j, k, m)] =
         add_mod_u64(jk_pairs[jk_pos(j, k, m)], jk_pairs[jk_pos(k, j, m)], p);
+      ctx->jk_sums[jk_pos(j, k, m)] = jk_sums[jk_pos(j, k, m)];
+    }
   }
+  
   ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
       uint64_t t = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
       ctx->jk_prod_M[pos] = mont_mul(t, ctx->r2, p, ctx->p_dash);
+    }
+  }
+  ctx->jk_prod = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k) {
+      size_t pos = jk_pos(j, k, m);
+      uint64_t t = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
+      ctx->jk_prod[pos] = t;
+    }
+  }
+  ctx->jk_prod_neg_M = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k) {
+      size_t pos = jk_pos(j, k, m);
+      ctx->jk_prod_neg_M[pos] = mont_mul(ctx->jk_prod_M[pos], mont_mul(p-1, ctx->r2, p, ctx->p_dash), p, ctx->p_dash);
+    }
+  }
+  ctx->jk_prod_neg = malloc(m*m*sizeof(uint64_t));
+  for (size_t j = 0; j < m; ++j) {
+    for (size_t k = 0; k < m; ++k) {
+      size_t pos = jk_pos(j, k, m);
+      uint64_t t = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
+      ctx->jk_prod_neg[pos] = mul_mod_u64(t, p-1, p);
     }
   }
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
@@ -314,6 +345,11 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
+  free(ctx->jk_prod);
+  free(ctx->jk_prod_neg);
+  free(ctx->jk_prod_neg_M);
+  free(ctx->ws);
+  free(ctx->jk_sums);
   free(ctx);
 }
 
@@ -412,11 +448,175 @@ uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
   uint64_t A[dim*dim];
 
   build_drop_mat(A, dim, exps, ctx);
-  return mont_mul(det_mod_p(A, dim, ctx), 1, ctx->p, ctx->p_dash);
+  uint64_t return_M = det_mod_p(A, dim, ctx);
+  // printf("\n[f_snd_trm] Second term: %"PRIu64"", return_M);
+  uint64_t result = mont_mul(return_M, 1, ctx->p, ctx->p_dash);
+  printf("\n[f] Det %"PRIu64"", result);
+  return result;
+}
+
+uint64_t f_only0(prim_ctx_t *ctx) {
+  uint64_t result = 
+      mul_mod_u64(
+        pow_mod_u64(2, (ctx->n-2) * (ctx->n-1) / 2, ctx->p), 
+        pow_mod_u64(ctx->n, ctx->n - 2, ctx->p), 
+      ctx->p);
+
+  printf("[f_only0] %"PRIu64"\n", result);
+  return result;
+}
+
+uint64_t f_only1exp(size_t exp, prim_ctx_t *ctx) {
+  uint64_t result = 
+      mul_mod_u64(
+        pow_mod_u64(2, (ctx->n-2) * (ctx->n-1) / 2, ctx->p), 
+        mul_mod_u64(
+          ctx->jk_prod[jk_pos(exp, 0, ctx->m)], 
+          pow_mod_u64(
+            add_mod_u64(mul_mod_u64(ctx->div2, ctx->n-1, ctx->p), ctx->jk_prod[jk_pos(exp, 0, ctx->m)], ctx->p),
+            ctx->n - 2, 
+          ctx->p), 
+        ctx->p), 
+      ctx->p);
+
+  printf("[f_only1exp] %"PRIu64"\n", result);
+  return result;
+}
+
+uint64_t f_only2exp(size_t *ms, size_t exp1, size_t exp2, prim_ctx_t *ctx) {
+  uint64_t t1 = add_mod_u64(mul_mod_u64(ms[exp2], ctx->jk_prod[jk_pos(exp1, exp2, ctx->m)], ctx->p), ctx->jk_prod[jk_pos(exp1, 0, ctx->m)], ctx->p);
+  uint64_t t2 = add_mod_u64(mul_mod_u64(ms[exp1], ctx->jk_prod[jk_pos(exp2, exp1, ctx->m)], ctx->p), ctx->jk_prod[jk_pos(exp2, 0, ctx->m)], ctx->p);
+    
+  printf("[f_only2exp] t1=%"PRIu64"\tt2=%"PRIu64"\tprod=%"PRIu64"\tsum=%"PRIu64"\n", t1, t2, ctx->jk_prod[jk_pos(exp1, exp2, ctx->m)], ctx->jk_sums[jk_pos(exp1, exp2, ctx->m)]);
+  uint64_t result = 
+    mul_mod_u64(
+      mul_mod_u64( 
+        mul_mod_u64( 
+          mul_mod_u64( 
+            mul_mod_u64( 
+              pow_mod_u64(
+                add_mod_u64(t1, mul_mod_u64(ms[exp1], ctx->div2, ctx->p), ctx->p), 
+                ms[exp1] - 1, ctx->p), 
+              pow_mod_u64(
+                add_mod_u64(t2, mul_mod_u64(ms[exp2], ctx->div2, ctx->p), ctx->p), 
+                ms[exp2] - 1, ctx->p), 
+                ctx->p), 
+            add_mod_u64(
+              mul_mod_u64(t1, t2, ctx->p), 
+              mul_mod_u64( 
+                mul_mod_u64(ctx->p - ms[exp1], ms[exp2], ctx->p),
+                mul_mod_u64(ctx->jk_prod_neg[jk_pos(exp1, exp2, ctx->m)], ctx->jk_prod_neg[jk_pos(exp2, exp1, ctx->m)], ctx->p), 
+                ctx->p),
+            ctx->p), 
+          ctx->p), 
+        pow_mod_u64(2, ((ms[exp1]-1) * (ms[exp1]) + (ms[exp2]-1) * (ms[exp2])) / 2, ctx->p),
+        ctx->p),
+      pow_mod_u64(ctx->jk_sums[jk_pos(exp1, exp2, ctx->m)], ms[exp1]*ms[exp2], ctx->p), 
+      ctx->p),
+    1, ctx->p);
+    
+  printf("[f_only2exp] %"PRIu64"\n", result);
+  return result;
+}
+
+uint64_t f_opt(uint64_t *exps, size_t *ms, prim_ctx_t *ctx) {
+  size_t dim = ctx->n-1;
+  uint64_t fst_term = ctx->r;
+  uint64_t main_diag[dim];
+  uint64_t det = 1;
+  for (size_t i = 0; i < dim; ++i) {
+    main_diag[i] = 0;
+  }
+  for (size_t k = 0; k < ctx->n; ++k) {
+    for (size_t j = 0; j < k; ++j) {
+      uint64_t jk_sum = ctx->jk_sums_M[jk_pos(exps[j], exps[k], ctx->m)];
+      
+      // uint64_t jk_neg_cell = ctx->jk_prod_neg[jk_pos(exps[j], exps[k], ctx->m)];
+      // uint64_t kj_neg_cell = ctx->jk_prod_neg[jk_pos(exps[k], exps[j], ctx->m)];
+      uint64_t jk_cell = ctx->jk_prod[jk_pos(exps[j], exps[k], ctx->m)];
+      uint64_t kj_cell = ctx->jk_prod[jk_pos(exps[k], exps[j], ctx->m)];
+
+      fst_term = mont_mul(fst_term, jk_sum, ctx->p, ctx->p_dash);
+      main_diag[j] = add_mod_u64(main_diag[j], jk_cell, ctx->p);  
+      if (k < dim) {
+        main_diag[k] = add_mod_u64(main_diag[k], kj_cell, ctx->p);
+      }
+    }
+  } 
+  
+  printf("[f_opt] Main diagonal:");
+  size_t d = 0;
+  uint64_t plus_half = (ctx->p + 1) / 2;
+  uint64_t minus_half = (ctx->p - 1) / 2;
+  uint64_t adj = 0;
+  uint64_t ab[ctx->m];
+  size_t s = 0;
+  for (size_t i = 0; i < ctx->m; ++i) {
+    if (ms[i] > 0) {
+      printf("\n\tMultiplicity of w^%zu: %zu, diag=%"PRIu64"", i, ms[i], main_diag[d]);
+      ab[i] = pow_mod_u64(add_mod_u64(main_diag[d], plus_half, ctx->p), ms[i]-1, ctx->p);
+      det = mul_mod_u64(det, add_mod_u64(main_diag[d], mul_mod_u64(minus_half, ms[i]-1, ctx->p), ctx->p), ctx->p);
+      det = mul_mod_u64(det, ab[i], ctx->p);    
+      if (i > 0 && d > 0) {
+          // adj = add_mod_u64(adj, mul_mod_u64(ms[i]*ms[s], mul_mod_u64(ab[s], mul_mod_u64(ab[i], mul_mod_u64(ctx->jk_prod_neg[jk_pos(s, i, ctx->m)], ctx->jk_prod_neg[jk_pos(i, s, ctx->m)], ctx->p), ctx->p), ctx->p), ctx->p), ctx->p);
+        adj = add_mod_u64(adj, mul_mod_u64(ms[i]*ms[s], mul_mod_u64(ab[s], ab[i], ctx->p), ctx->p), ctx->p);
+      }
+      s=i;
+    }
+    for (size_t l = 0; l < ms[i]; ++l) {
+      // printf("\t%"PRIu64"", main_diag[d]);
+      // if (ms[i] % 2 == 0) {
+//         if (l % 2 == 0) {
+//           det = mul_mod_u64(det, add_mod_u64(main_diag[d], plus_half, ctx->p), ctx->p);
+//         }
+//         else {
+//           det = mul_mod_u64(det, add_mod_u64(main_diag[d], minus_half, ctx->p), ctx->p);
+//         }
+//       }
+//       else {
+//         det = mul_mod_u64(det, main_diag[d], ctx->p);
+//       }
+      ++d;   
+    }
+  }
+  printf("\n[f_opt] Shortcut: %"PRIu64"\tAdjustment: %"PRIu64" =  %"PRIu64"\n", det, adj, add_mod_u64(det, ctx->p - adj, ctx->p));
+  uint64_t result = mul_mod_u64(det, mont_mul(fst_term, 1, ctx->p, ctx->p_dash), ctx->p);
+  return result;
 }
 
 uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
+  printf("[f] Exponents:");
+  for (size_t i = 0; i < ctx->n; ++i) {
+    printf(" %"PRIu64"", exps[i]);   
+  }
+  uint64_t result = mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
+  printf("\n%"PRIu64"\n", result);
+  return result;
+}
+
+uint64_t f_triage(uint64_t *exps, size_t *ms, prim_ctx_t *ctx) {
+  size_t counter = 0;
+  size_t exp1 = -1;
+  size_t exp2 = -1;
+  
+  for (size_t i = 0; i < ctx->m; ++i) {
+    if (ms[i] > 0) {
+      if (counter == 0) exp1 = i;
+      else exp2 = i;
+      ++counter;
+    }
+  }
+  if (counter <= 1) {
+    if (exp1 == 0) return f_only0(ctx);
+    return f_only1exp(exp1, ctx);
+  }
+  if (counter == 2) {
+    return f_only2exp(ms, exp1, exp2, ctx);
+  }
+  if (counter == ctx->m || (counter == ctx->m - 1 && ms[0] == 0)) {
+    
+  }
+  return f(exps, ctx);
 }
 
 typedef struct {
@@ -474,12 +674,15 @@ int main(int argc, char **argv) {
 
   for (size_t i = 0; i < np; ++i) {
     uint64_t p = ps[i];
+    p = 271;
 
     mpz_set(Xp, X);
     mpz_set(Mp, M);
 
     uint64_t w = mth_root_mod_p(p, m);
+    w = 28;
     prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+    printf("p = %"PRIu64", w = %"PRIu64"\n", p, w);
 
     size_t vec[m], scratch[m];
     uint64_t acc = 0;
@@ -488,21 +691,21 @@ int main(int argc, char **argv) {
     size_t mss_siz = mss_iter_size(&it);
     _Atomic size_t done = 0;
     progress_t st = { .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER };
-    pthread_condattr_t ca;
-    pthread_condattr_init(&ca);
-    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
-    pthread_cond_init(&st.cv, &ca);
-    pthread_condattr_destroy(&ca);
-    pthread_t prog;
-    pthread_create(&prog, NULL, progress, &st);
-    #pragma omp parallel
+    // pthread_condattr_t ca;
+    // pthread_condattr_init(&ca);
+    // pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+    // pthread_cond_init(&st.cv, &ca);
+    // pthread_condattr_destroy(&ca);
+    // pthread_t prog;
+    // pthread_create(&prog, NULL, progress, &st);
+    // #pragma omp parallel
     {
       #define CHUNK 64
       size_t buf[CHUNK][m];
       uint64_t l_exps[n], l_acc = 0;
       for (;;) {
         size_t got = 0;
-        #pragma omp critical
+        // #pragma omp critical
         {
           while (got < CHUNK && mss_iter(&it))
             memcpy(buf[got++], vec, m*sizeof(size_t));
@@ -510,21 +713,32 @@ int main(int argc, char **argv) {
         }
         if (!got) break;
 
+
         for (size_t c = 0; c < got; ++c) {
+
+          printf("Multiset[");
+          for (size_t mi = 0; mi < m; mi++) {
+            printf(" %zu", buf[c][mi]);
+          }
+          printf(" ]\n");
+          
           create_exps(buf[c], m, l_exps);
           uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
+          printf("---x %"PRIu64"\n", coeff);
+          // uint64_t f_opt_n = mul_mod_u64(coeff, f_opt(l_exps, buf[c], ctx), p);
           uint64_t f_n = mul_mod_u64(coeff, f(l_exps, ctx), p);
+          uint64_t f_triage_n = mul_mod_u64(coeff, f_triage(l_exps, buf[c], ctx), p);
           l_acc = add_mod_u64(l_acc, f_n, p);
         }
       }
-      #pragma omp critical
+      // #pragma omp critical
       acc = add_mod_u64(acc, l_acc, p);
     }
-    pthread_mutex_lock(&st.mu);
-    st.quit = true;
-    pthread_cond_signal(&st.cv);
-    pthread_mutex_unlock(&st.mu);
-    pthread_join(prog, NULL);
+    // pthread_mutex_lock(&st.mu);
+    // st.quit = true;
+    // pthread_cond_signal(&st.cv);
+    // pthread_mutex_unlock(&st.mu);
+    // pthread_join(prog, NULL);
     uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
     printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
 

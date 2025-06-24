@@ -1,0 +1,61 @@
+OBJECTIVE: Implement omega transforms
+
+
+Recognize rotationally equivalent multisets (or iterate with this ordering)
+  Only compute f() for first rotation encountered
+  Compute the remaining m-1 terms that are rotationally equivalent by multiplying by omega 
+    (omitting any invalid multisets -- no implicit zero)
+
+Example:
+      (3 0 0) => calculate f(3, 0, 0), can calculate w * (0, 3, 0) or (0, 0, 3) but these are invalid
+      (2 1 0) => calculate f(2, 1, 0), can calculate w * (1, 0, 2) VALID, can calculate(0, 2, 1) INVALID
+      (2 0 1) => calculate f(2, 0, 1), can calculate w * (1, 2, 0) VALID, can calculate(0, 1, 2) INVALID
+      ...
+      
+      f(9 0 0 0 0 1 9 0 0 0 0 0)
+      f(9 0 0 0 0 0 9 0 0 0 0 1)
+      
+      f(7 )
+      
+      
+      
+      f(9 0 0 0 1 2 0 0 0 3 4 4 9)
+      f(9 9 0 0 0 1 2 0 0 0 3 4 4)
+      f(2 0 0 0 3 4 4 9 9 0 0 0 1)
+      
+      f(1 2 0 0 0 3 4 4 9 9 0 0 0) = w * f(2 0 0 0 3 4 4 9 9 0 0 0 1)
+      f(0 1 2 0 0 0 3 4 4 9 9 0 0) = w * f(1 2 0 0 0 3 4 4 9 9 0 0 0) = w^2 * f(2 0 0 0 3 4 4 9 9 0 0 0 1) INVALID
+
+
+
+ALTERNATIVE FORMULATION: Take advantage of the already calculated determinant of the quotient matrix (r x r)
+
+The quotient matrix is the non-diagonal component of the matrix, which means its just the *relative* distances between the exponents
+The quotient matrix determinant can be reused for all multisets that share the same relative distances
+
+Example:
+     (1, 1, 0, 0, 0) ==relative distance== (0, 1, 1, 0, 0) == (0, 0, 1, 1, 0) == (0, 0, 0, 1, 1) == 
+         1 + w                                w(1 + w)            w^2(1 + w)
+     (2, 2, 0, 0, 0)
+     (a, a, 0, 0, 0) == (0, 0, 0, a, a)
+         
+         
+f([1,1,0]) = prod([1,1,0]) * det([1,1,0])
+  det([1,1,0]) = lambda([1,1,0]) * det Q([1,1,0])
+  
+f([0,1,1]) = prod([0,1,1]) * det([0,1,1])
+  det([0,1,1]) = lambda([0,1,1]) * (any of Q([1,1,0]) == Q[0,1,1] == Q[1,0,1])
+     
+
+
+
+
+
+FUTURE OBJECTIVES?
+
+Iterative determinant?
+Cubic identifiers of omega-groups?
+
+
+
+
