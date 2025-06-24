@@ -486,17 +486,13 @@ uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
   ++c[0];
 
   // active groups
-  size_t typ[m], r = 0, del_i = (size_t)-1;
+  size_t typ[m], r = 0, del_i = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
       typ[r] = i;
-      // delete first non-empty
-      if (del_i == (size_t)-1)
-        del_i = i;
       ++r;
     }
   }
-  const uint64_t c_del = c[del_i];
 
   uint64_t prod_int = 1;
   for (size_t a = 0; a < r; ++a) {
@@ -525,7 +521,7 @@ uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
       if (i == del_i) continue;
 
       uint64_t diag = 0;
-      size_t col  = 0;
+      size_t col = 0;
 
       // contribution from the deleted block
       uint64_t w_del = ctx->jk_prod[jk_pos(i, del_i, m)];
@@ -535,17 +531,14 @@ uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
       // remaining off-diagonal blocks
       for (size_t b = 0; b < r; ++b) {
         size_t j = typ[b];
-        if (j == del_i)
-          continue;
-
-        if (j == i)
+        if (j == del_i || j == i)
           continue;
 
         if (col == row)
           ++col;
 
-        uint64_t w  = ctx->jk_prod[jk_pos(i, j, m)];
-        uint64_t v  = mul_mod_u64(c[j], w, p);
+        uint64_t w = ctx->jk_prod[jk_pos(i, j, m)];
+        uint64_t v = mul_mod_u64(c[j], w, p);
 
         A[row*dim + col] = v ? p - v : 0;
         diag = add_mod_u64(diag, v, p);
@@ -559,7 +552,7 @@ uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
   for (size_t i = 0; i < dim*dim; ++i)
     A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
   uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
-  det_q = mul_mod_u64(det_q, inv_mod_u64(c_del, p), p);
+  det_q = mul_mod_u64(det_q, inv_mod_u64(c[del_i], p), p);
   return mul_mod_u64(prod_int, det_q, p);
 }
 
