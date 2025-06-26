@@ -1,8 +1,5 @@
 #include "oeis.h"
 #include "debug.h"
-#include "maths.h"
-#include "primes.h"
-#include "mss.h"
 #include "combine.h"
 #include "source_combine.h"
 #include "source_process.h"
