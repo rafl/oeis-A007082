@@ -51,3 +51,12 @@ uint64_t inv64_u64(uint64_t p) {
   x *= 2 - p * x;
   return x;
 }
+
+uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
+  uint128_t t = (uint128_t)a * b;
+  uint64_t m = (uint64_t)t * p_dash;
+  uint128_t u = t + (uint128_t)m * p;
+  uint64_t res = u >> 64;
+  if (res >= p) res -= p;
+  return res;
+}

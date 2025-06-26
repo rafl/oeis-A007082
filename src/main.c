@@ -31,15 +31,6 @@ void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   dst[idx] = 0;
 }
 
-static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
-  uint128_t t = (uint128_t)a * b;
-  uint64_t m = (uint64_t)t * p_dash;
-  uint128_t u = t + (uint128_t)m * p;
-  uint64_t res = u >> 64;
-  if (res >= p) res -= p;
-  return res;
-}
-
 #define PRIME_BITS 61
 static size_t primes_needed(uint64_t n) {
   // theorem #4
