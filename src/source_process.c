@@ -200,10 +200,6 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   return mont_mul(acc, 1, ctx->p, ctx->p_dash);
 }
 
-static inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
-  return (x >= y) ? x - y : x + p - y;
-}
-
 // TODO: move back into montgomery domain?
 static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
