@@ -4,6 +4,7 @@
 #include "primes.h"
 #include "mss.h"
 #include "combine.h"
+#include "source_combine.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -351,26 +352,6 @@ static uint64_t parse_uint(const char *s) {
   return n;
 }
 
-typedef struct source_St {
-  int  (*next)(struct source_St *, uint64_t *res, uint64_t *p);
-  void (*destroy)(struct source_St *);
-  void *state;
-} source_t;
-
-static int stdin_next(source_t *, uint64_t *res, uint64_t *p) {
-  return scanf("%"SCNu64" %% %"SCNu64, res, p) == 2;
-}
-
-static void stdin_destroy(source_t *src) {
-  free(src);
-}
-
-source_t *source_stdin_new(void) {
-  source_t *src = malloc(sizeof *src);
-  *src = (source_t){ .next = stdin_next, .destroy = stdin_destroy, .state = NULL };
-  return src;
-}
-
 typedef struct {
   uint64_t n, m, *ps;
   size_t idx, np;
@@ -466,10 +447,12 @@ static void proc_destroy(source_t *self) {
   free(self);
 }
 
+#define P_STRIDE (1ULL << 10)
+
 source_t *source_process_new(uint64_t n, uint64_t m_id) {
   uint64_t m = m_for(n);
   size_t np;
-  uint64_t *ps = build_prime_list(n, m, m_id, &np);
+  uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
 
   proc_state_t *st = malloc(sizeof(*st));
   *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps };

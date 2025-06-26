@@ -78,15 +78,15 @@ static size_t primes_needed(uint64_t n) {
   return (bits+PRIME_BITS-1)/PRIME_BITS;
 }
 
-uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t *out_np) {
+uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t stride, size_t *out_np) {
   size_t np = primes_needed(n);
   uint64_t *ps = malloc(np * sizeof(*ps));
 
-  uint64_t stride = P_STRIDE*m;
-  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
+  uint64_t stride_m = stride*m;
+  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride_m;
   for (size_t i = 0; i < np; ++i) {
     ps[i] = prime_congruent_1_mod_m(p_base, m);
-    p_base = ps[i] + stride;
+    p_base = ps[i] + stride_m;
   }
   *out_np = np;
   return ps;
