@@ -201,7 +201,7 @@ static uint64_t m_for(uint64_t n) {
 void print_vec(const size_t *v, size_t len) {
   putchar('[');
   for (size_t i = 0; i < len; ++i)
-    printf("%zu%s", v[i], ((i+1==len) ? "" : ","));
+    // printf("%zu%s", v[i], ((i+1==len) ? "" : ","));
   puts("]");
 }
 
@@ -225,7 +225,7 @@ static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_d
   return res;
 }
 
-#define PRIME_BITS 61
+#define PRIME_BITS 16
 static size_t primes_needed(uint64_t n) {
   // theorem #4
   double log2En = ((n-2.0)*(n+1.0)/2.0)*log2(n)
@@ -451,7 +451,7 @@ uint64_t f_snd_trm(uint64_t *exps, prim_ctx_t *ctx) {
   uint64_t return_M = det_mod_p(A, dim, ctx);
   // printf("\n[f_snd_trm] Second term: %"PRIu64"", return_M);
   uint64_t result = mont_mul(return_M, 1, ctx->p, ctx->p_dash);
-  printf("\n[f] Det %"PRIu64"", result);
+  // printf("\n[f] Det %"PRIu64"", result);
   return result;
 }
 
@@ -462,7 +462,7 @@ uint64_t f_only0(prim_ctx_t *ctx) {
         pow_mod_u64(ctx->n, ctx->n - 2, ctx->p), 
       ctx->p);
 
-  printf("[f_only0] %"PRIu64"\n", result);
+  // printf("[f_only0] %"PRIu64"\n", result);
   return result;
 }
 
@@ -479,7 +479,7 @@ uint64_t f_only1exp(size_t exp, prim_ctx_t *ctx) {
         ctx->p), 
       ctx->p);
 
-  printf("[f_only1exp] %"PRIu64"\n", result);
+  // printf("[f_only1exp] %"PRIu64"\n", result);
   return result;
 }
 
@@ -487,7 +487,7 @@ uint64_t f_only2exp(size_t *ms, size_t exp1, size_t exp2, prim_ctx_t *ctx) {
   uint64_t t1 = add_mod_u64(mul_mod_u64(ms[exp2], ctx->jk_prod[jk_pos(exp1, exp2, ctx->m)], ctx->p), ctx->jk_prod[jk_pos(exp1, 0, ctx->m)], ctx->p);
   uint64_t t2 = add_mod_u64(mul_mod_u64(ms[exp1], ctx->jk_prod[jk_pos(exp2, exp1, ctx->m)], ctx->p), ctx->jk_prod[jk_pos(exp2, 0, ctx->m)], ctx->p);
     
-  printf("[f_only2exp] t1=%"PRIu64"\tt2=%"PRIu64"\tprod=%"PRIu64"\tsum=%"PRIu64"\n", t1, t2, ctx->jk_prod[jk_pos(exp1, exp2, ctx->m)], ctx->jk_sums[jk_pos(exp1, exp2, ctx->m)]);
+  // printf("[f_only2exp] t1=%"PRIu64"\tt2=%"PRIu64"\tprod=%"PRIu64"\tsum=%"PRIu64"\n", t1, t2, ctx->jk_prod[jk_pos(exp1, exp2, ctx->m)], ctx->jk_sums[jk_pos(exp1, exp2, ctx->m)]);
   uint64_t result = 
     mul_mod_u64(
       mul_mod_u64( 
@@ -515,7 +515,7 @@ uint64_t f_only2exp(size_t *ms, size_t exp1, size_t exp2, prim_ctx_t *ctx) {
       ctx->p),
     1, ctx->p);
     
-  printf("[f_only2exp] %"PRIu64"\n", result);
+  // printf("[f_only2exp] %"PRIu64"\n", result);
   return result;
 }
 
@@ -544,7 +544,7 @@ uint64_t f_opt(uint64_t *exps, size_t *ms, prim_ctx_t *ctx) {
     }
   } 
   
-  printf("[f_opt] Main diagonal:");
+  // printf("[f_opt] Main diagonal:");
   size_t d = 0;
   uint64_t plus_half = (ctx->p + 1) / 2;
   uint64_t minus_half = (ctx->p - 1) / 2;
@@ -553,7 +553,7 @@ uint64_t f_opt(uint64_t *exps, size_t *ms, prim_ctx_t *ctx) {
   size_t s = 0;
   for (size_t i = 0; i < ctx->m; ++i) {
     if (ms[i] > 0) {
-      printf("\n\tMultiplicity of w^%zu: %zu, diag=%"PRIu64"", i, ms[i], main_diag[d]);
+      // printf("\n\tMultiplicity of w^%zu: %zu, diag=%"PRIu64"", i, ms[i], main_diag[d]);
       ab[i] = pow_mod_u64(add_mod_u64(main_diag[d], plus_half, ctx->p), ms[i]-1, ctx->p);
       det = mul_mod_u64(det, add_mod_u64(main_diag[d], mul_mod_u64(minus_half, ms[i]-1, ctx->p), ctx->p), ctx->p);
       det = mul_mod_u64(det, ab[i], ctx->p);    
@@ -579,18 +579,18 @@ uint64_t f_opt(uint64_t *exps, size_t *ms, prim_ctx_t *ctx) {
       ++d;   
     }
   }
-  printf("\n[f_opt] Shortcut: %"PRIu64"\tAdjustment: %"PRIu64" =  %"PRIu64"\n", det, adj, add_mod_u64(det, ctx->p - adj, ctx->p));
+  // printf("\n[f_opt] Shortcut: %"PRIu64"\tAdjustment: %"PRIu64" =  %"PRIu64"\n", det, adj, add_mod_u64(det, ctx->p - adj, ctx->p));
   uint64_t result = mul_mod_u64(det, mont_mul(fst_term, 1, ctx->p, ctx->p_dash), ctx->p);
   return result;
 }
 
 uint64_t f(uint64_t *exps, prim_ctx_t *ctx) {
-  printf("[f] Exponents:");
+  // printf("[f] Exponents:");
   for (size_t i = 0; i < ctx->n; ++i) {
-    printf(" %"PRIu64"", exps[i]);   
+    // printf(" %"PRIu64"", exps[i]);
   }
   uint64_t result = mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(exps, ctx), ctx->p);
-  printf("\n%"PRIu64"\n", result);
+  // printf("\n%"PRIu64"\n", result);
   return result;
 }
 
@@ -636,7 +636,7 @@ void *progress(void *_ud) {
   while (!ud->quit) {
     size_t d = atomic_load_explicit(done, memory_order_relaxed);
     double pct = 100.0 * d / tot;
-    fprintf(stderr, "\r%5.2f%%", pct);
+    // fprintf(stderr, "\r%5.2f%%", pct);
     if (d >= tot) break;
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -644,135 +644,131 @@ void *progress(void *_ud) {
     pthread_cond_timedwait(&ud->cv, &ud->mu, &ts);
   }
   pthread_mutex_unlock(&ud->mu);
-  fprintf(stderr, "\r");
+  // fprintf(stderr, "\r");
   return NULL;
 }
 
 int main(int argc, char **argv) {
-  uint64_t n = 13;
+  printf("[\n[\"n\", \"m\", \"p\", \"w\", \"ms\", \"f\"],\n");
+  for (uint64_t n = 3; n <= 13; n += 2) {
 
-  if (argc > 1) {
-    n = atoll(argv[1]);
-  }
+    uint64_t m = m_for(n);
+    // printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
+    
+    size_t np = 20; //primes_needed(n);
+    uint64_t ps[np];
+    uint64_t p_base = 1ULL << (PRIME_BITS-1);
+    for (size_t i = 0; i < np; ++i) {
+      ps[i] = prime_congruent_1_mod_m(p_base, m);
+      p_base = ps[i]+1;
+    }
 
-  uint64_t m = m_for(n);
-  printf("n = %"PRIu64", m = %"PRIu64"\n", n, m);
+    mpz_t X, M, Xp, Mp, u, inv, mz, rz;
+    mpz_inits(X, M, Xp, Mp, u, inv, mz, rz, NULL);
+    mpz_set_ui(X, 0);
+    mpz_set_ui(M, 1);
+    bool converged = false;
 
-  size_t np = primes_needed(n);
-  uint64_t ps[np];
-  uint64_t p_base = 1ULL << (PRIME_BITS-1);
-  for (size_t i = 0; i < np; ++i) {
-    ps[i] = prime_congruent_1_mod_m(p_base, m);
-    p_base = ps[i]+1;
-  }
+    for (size_t i = 0; i < np; ++i) {
+      uint64_t p = ps[i];
 
-  mpz_t X, M, Xp, Mp, u, inv, mz, rz;
-  mpz_inits(X, M, Xp, Mp, u, inv, mz, rz, NULL);
-  mpz_set_ui(X, 0);
-  mpz_set_ui(M, 1);
-  bool converged = false;
+      mpz_set(Xp, X);
+      mpz_set(Mp, M);
 
-  for (size_t i = 0; i < np; ++i) {
-    uint64_t p = ps[i];
-    p = 271;
+      uint64_t w = mth_root_mod_p(p, m);
+      prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+      // printf("p = %"PRIu64", w = %"PRIu64"\n", p, w);
 
-    mpz_set(Xp, X);
-    mpz_set(Mp, M);
-
-    uint64_t w = mth_root_mod_p(p, m);
-    w = 28;
-    prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
-    printf("p = %"PRIu64", w = %"PRIu64"\n", p, w);
-
-    size_t vec[m], scratch[m];
-    uint64_t acc = 0;
-    mss_iter_t it;
-    mss_iter_new(&it, m, n-1, vec, scratch);
-    size_t mss_siz = mss_iter_size(&it);
-    _Atomic size_t done = 0;
-    progress_t st = { .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER };
-    // pthread_condattr_t ca;
-    // pthread_condattr_init(&ca);
-    // pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
-    // pthread_cond_init(&st.cv, &ca);
-    // pthread_condattr_destroy(&ca);
-    // pthread_t prog;
-    // pthread_create(&prog, NULL, progress, &st);
-    // #pragma omp parallel
-    {
-      #define CHUNK 64
-      size_t buf[CHUNK][m];
-      uint64_t l_exps[n], l_acc = 0;
-      for (;;) {
-        size_t got = 0;
-        // #pragma omp critical
-        {
-          while (got < CHUNK && mss_iter(&it))
-            memcpy(buf[got++], vec, m*sizeof(size_t));
-          atomic_fetch_add_explicit(&done, got, memory_order_relaxed);
-        }
-        if (!got) break;
-
-
-        for (size_t c = 0; c < got; ++c) {
-
-          printf("Multiset[");
-          for (size_t mi = 0; mi < m; mi++) {
-            printf(" %zu", buf[c][mi]);
+      size_t vec[m], scratch[m];
+      uint64_t acc = 0;
+      mss_iter_t it;
+      mss_iter_new(&it, m, n-1, vec, scratch);
+      size_t mss_siz = mss_iter_size(&it);
+      _Atomic size_t done = 0;
+      progress_t st = { .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER };
+      // pthread_condattr_t ca;
+      // pthread_condattr_init(&ca);
+      // pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+      // pthread_cond_init(&st.cv, &ca);
+      // pthread_condattr_destroy(&ca);
+      // pthread_t prog;
+      // pthread_create(&prog, NULL, progress, &st);
+      // #pragma omp parallel
+      {
+        #define CHUNK 64
+        size_t buf[CHUNK][m];
+        uint64_t l_exps[n], l_acc = 0;
+        for (;;) {
+          size_t got = 0;
+          // #pragma omp critical
+          {
+            while (got < CHUNK && mss_iter(&it))
+              memcpy(buf[got++], vec, m*sizeof(size_t));
+            atomic_fetch_add_explicit(&done, got, memory_order_relaxed);
           }
-          printf(" ]\n");
-          
-          create_exps(buf[c], m, l_exps);
-          uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
-          printf("---x %"PRIu64"\n", coeff);
-          // uint64_t f_opt_n = mul_mod_u64(coeff, f_opt(l_exps, buf[c], ctx), p);
-          uint64_t f_n = mul_mod_u64(coeff, f(l_exps, ctx), p);
-          uint64_t f_triage_n = mul_mod_u64(coeff, f_triage(l_exps, buf[c], ctx), p);
-          l_acc = add_mod_u64(l_acc, f_n, p);
+          if (!got) break;
+
+
+          for (size_t c = 0; c < got; ++c) {         
+            create_exps(buf[c], m, l_exps);
+            uint64_t coeff = multinomial_mod_p(ctx, buf[c], m);
+            // printf("---x %"PRIu64"\n", coeff);
+            // uint64_t f_opt_n = mul_mod_u64(coeff, f_opt(l_exps, buf[c], ctx), p);
+            uint64_t f_ret = f(l_exps, ctx);
+            uint64_t f_n = mul_mod_u64(coeff, f_ret, p);
+            printf("[%"PRIu64", %"PRIu64", %"PRIu64", %"PRIu64",\"", n, m, p, w);
+            for (size_t mi = 0; mi < m; mi++) {
+              printf(" %zu", buf[c][mi]);
+            }
+            printf("\", %"PRIu64"],\n", f_ret);
+            // uint64_t f_triage_n = mul_mod_u64(coeff, f_triage(l_exps, buf[c], ctx), p);
+            l_acc = add_mod_u64(l_acc, f_n, p);
+          }
         }
+        // #pragma omp critical
+        acc = add_mod_u64(acc, l_acc, p);
       }
-      // #pragma omp critical
-      acc = add_mod_u64(acc, l_acc, p);
+      // pthread_mutex_lock(&st.mu);
+      // st.quit = true;
+      // pthread_cond_signal(&st.cv);
+      // pthread_mutex_unlock(&st.mu);
+      // pthread_join(prog, NULL);
+      uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
+      // printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
+
+      mpz_set_ui(rz, ret);
+      mpz_set_ui(mz, p);
+
+      mpz_mod(u, X, mz);
+      mpz_sub(u, rz, u);
+      mpz_mod(u, u, mz);
+
+      assert(mpz_invert(inv, M, mz) != 0);
+
+      mpz_mul(u, u, inv);
+      mpz_mod(u, u, mz);
+      mpz_mul(inv, M, u);
+      mpz_add(X, X, inv);
+      mpz_mul(M, M, mz);
+
+      prim_ctx_free(ctx);
+
+      if (i > 0) {
+        if (mpz_cmp(X, Xp) == 0) {
+          converged = true;
+          // gmp_printf("\ne(%d) = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
+          // break;
+        } 
+        //else
+          // gmp_printf("e(%d) >= %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
+      }
     }
-    // pthread_mutex_lock(&st.mu);
-    // st.quit = true;
-    // pthread_cond_signal(&st.cv);
-    // pthread_mutex_unlock(&st.mu);
-    // pthread_join(prog, NULL);
-    uint64_t ret = mul_mod_u64(acc, pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p), p);
-    printf("%"PRIu64" %% %"PRIu64"\n", ret, p);
 
-    mpz_set_ui(rz, ret);
-    mpz_set_ui(mz, p);
+    // if (!converged)
+      // gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", X, M);
 
-    mpz_mod(u, X, mz);
-    mpz_sub(u, rz, u);
-    mpz_mod(u, u, mz);
-
-    assert(mpz_invert(inv, M, mz) != 0);
-
-    mpz_mul(u, u, inv);
-    mpz_mod(u, u, mz);
-    mpz_mul(inv, M, u);
-    mpz_add(X, X, inv);
-    mpz_mul(M, M, mz);
-
-    prim_ctx_free(ctx);
-
-    if (i > 0) {
-      if (mpz_cmp(X, Xp) == 0) {
-        converged = true;
-        gmp_printf("\ne(%d) = %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
-        break;
-      } else
-        gmp_printf("e(%d) >= %Zd\n  after %zu primes, mod %Zd\n", n, X, i+1, M);
-    }
+    mpz_clears(X, M, Xp, Mp, u, inv, mz, rz, NULL);   
   }
-
-  if (!converged)
-    gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", X, M);
-
-  mpz_clears(X, M, Xp, Mp, u, inv, mz, rz, NULL);
-
+  printf("0\n]");
   return 0;
 }

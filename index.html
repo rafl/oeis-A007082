@@ -1,0 +1,177 @@
+<html>
+  <head>
+    <style>
+      #legend {
+        z-index: 999;
+        background: white;
+        width: 7em;
+        overflow-x: hidden;
+        position: fixed;
+        top: 2em;
+        left: 2em;
+        border-radius: 1em;
+      }
+      #legend input {
+        margin: 1em;
+        display: block;
+        position: relative;
+      }
+      #legend input::after {
+        content: attr(label);
+        color: black;
+        position: absolute;
+        top: 0;
+        left: 2em;
+        width: 10em;
+      }
+    </style>
+    <script src="//cdn.jsdelivr.net/npm/3d-force-graph"></script>
+    <script>
+      
+      const mulmod = (a, b, p) => { 
+        // console.log("mulmod",a,b,p);
+        return ((a * b) % p); 
+      };
+      const powmod = (a, b, p) => { 
+        // console.log("powmod",a,b,p);
+        var r = 1; 
+        for(var i=0; i < b; i++) {
+          r *= a;
+          r = r % p;
+        }
+        return r; 
+      };
+      const sanitizeLabel = (label) => {
+        return label.replace(/\-/g, "neg").replace(/\^/g, "pow").replace(/\*/g, "mul").replace(/[\(\)]/g, "").replace(/\</g, "lt").replace(/\>/g, "gt");
+      }
+      
+      window.onload = () => {
+        const graph = new ForceGraph3D(document.getElementById("graph"));
+        const multisets = new Map();
+        const fhash = new Map();
+        const chash = new Map();
+        const runs = new Map();
+        var explore = {};
+        const nodes = {};
+        const links = [];
+        var exploreM = {};
+        //.graphData(<myData>);
+        
+        fetch("output9.json")
+          .then((response) => response.json())
+          .then((data) => {
+            // var labels = ["*1","*-1",]
+            const labels = ["*1","*-1","*2","*3","*-2","*-3","*w","*-w","*-(w+1)"];
+            // const labels = ["*1","*-1","*w","*-w"];
+            // const labels = ["*1","*w"];
+            // const labels = ["*1"];
+            let active_p = false;
+            for(var i=1; i < data.length - 1; i++) {//ignore header and footer
+              // console.log(data[i]);
+              const n = parseInt(data[i][0]);
+              const m = parseInt(data[i][1]);
+              const p = parseInt(data[i][2]);
+              const w = parseInt(data[i][3]);
+              const np = `${m} ${p}`;
+              
+              if (n >= 3 && n == 9 && (!active_p || np == active_p)) {
+                active_p = np;
+                var ms = data[i][4].trim().split(" ");
+                ms[0] = parseInt(ms[0]) + 1;
+                ms = "[" + ms.join(" ") + "]";
+                const f = parseInt(data[i][5]);
+                const multiset = multisets.get(ms) || {};
+                runs.set(np, {w, m, p});
+                const lookup = fhash.get(f) || {};
+                lookup[np] = ms;
+                fhash.set(f, lookup);
+                multiset[p] = f;
+                multisets.set(ms, multiset);
+                
+                explore[np] = explore[np] || {};
+                // explore[np][ms] = [f];
+                // explore[np][ms] = [f, p-f, f_m, p-f_m];
+                // explore[np][ms] = [f, mulmod(f, w, p)];
+                // explore[np][ms] = [f, p-f, mulmod(f, w, p), mulmod(f, p-w, p)];
+                explore[np][ms] = [f, mulmod(f, p-1, p), mulmod(f, 2, p), mulmod(f, 3, p), mulmod(f, p-2, p), mulmod(f, p-3, p), mulmod(f, w, p), mulmod(f, p-w, p), mulmod(f, p-w-1, p)];
+                for (var j = 2; j < 18; j++) {
+                  labels[explore[np][ms].length] = "^" + j;
+                  explore[np][ms].push(powmod(f, j, p));
+                  labels[explore[np][ms].length] = "-^" + j;
+                  explore[np][ms].push(p-powmod(f, j, p));
+                }
+              }
+            }
+            // for (var np in exploreM) {
+            //   const p = runs.get(np).p;
+            //   for (var i in exploreM[np]) {
+            //     for (var j in exploreM[np]) {
+            //       labels.push(`<${i}*${j}>`);
+            //       exploreM[np][i].push(mulmod(i, j, p));
+            //       labels.push(`<${i}*-${j}>`);
+            //       exploreM[np][i].push(mulmod(i, p-j, p));
+            //     }
+            //   }
+            // }
+            
+            // console.log(exploreM);
+            for (var np in explore) {
+              for (var ms in explore[np]) {
+                const m = runs.get(np).m;
+                const p = runs.get(np).p;
+                nodes[ms] = { id: ms, name: ms, n: np};
+                // var target = chash.get(exploreM[np][ms][1]);
+                // console.log(target);
+                for (var i = 1; i < explore[np][ms].length; i++) {
+                  var target = fhash.get(explore[np][ms][i]);
+                  if (target && np in target && target[np] != ms) {
+                    links.push({ source: ms, target: target[np], name: labels[i], filt: sanitizeLabel(labels[i])});
+                    //links.push({ source: ms, target: exploreM[np][ms][i], name: labels[i], filt: sanitizeLabel(labels[i])});
+                  }
+                }
+              }
+            }
+            
+            console.log(links);
+            function updateGraph() {
+              const flinks = links.filter((d) => !document.getElementById(d.filt) ||  document.getElementById(d.filt).checked);
+              
+              graph
+                .nodeAutoColorBy("n")
+                .linkAutoColorBy("name")
+                .linkOpacity(.5)
+                .linkWidth(2)
+                .linkDirectionalParticles(4)
+                // .backgroundColor("black")
+                .graphData({
+                nodes: Object.values(nodes),
+                links: flinks,
+              });     
+            }
+            
+            const legend = document.getElementById("legend");
+            // labels = ["*1", "*-1", "x*y"]
+            for (var i = 0; i < labels.length; i++) {
+              const elem = document.createElement("input");
+              elem.type = "checkbox";
+              elem.checked = elem.value = true;
+              elem.oninput = updateGraph;
+              elem.id = sanitizeLabel(labels[i]); 
+              elem.setAttribute("label", labels[i]);
+              if (links.filter((d) => d.filt == elem.id).length)
+                legend.appendChild(elem);
+            }
+            
+            updateGraph();
+            
+          })
+          .catch(console.error);
+        
+      };
+    </script>
+  </head>
+  <body>
+    <div id="legend"></div>
+    <div id="graph"></div>
+  </body>
+</html>
