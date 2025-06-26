@@ -9,7 +9,6 @@
 #include <inttypes.h>
 #include <string.h>
 #include <gmp.h>
-#include <math.h>
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <unistd.h>
