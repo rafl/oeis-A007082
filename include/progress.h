@@ -1,0 +1,23 @@
+#pragma once
+
+#include <stddef.h>
+#include <stdbool.h>
+#include <pthread.h>
+#include <stdatomic.h>
+
+typedef struct {
+  _Atomic size_t *done;
+  size_t tot;
+  bool quit;
+  pthread_cond_t cv;
+  pthread_mutex_t mu;
+  struct timespec start;
+} progress_st_t;
+
+typedef struct {
+  progress_st_t st;
+  pthread_t prog;
+} progress_t;
+
+void progress_start(progress_t *, _Atomic size_t *, size_t);
+void progress_stop(progress_t *restrict);
