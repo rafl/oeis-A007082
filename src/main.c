@@ -1,7 +1,9 @@
 #include "oeis.h"
+#include "debug.h"
 #include "maths.h"
 #include "primes.h"
 #include "mss.h"
+#include "combine.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -29,18 +31,6 @@ void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   }
 
   dst[idx] = 0;
-}
-
-#define PRIME_BITS 61
-static size_t primes_needed(uint64_t n) {
-  // theorem #4
-  double log2En = ((n-2.0)*(n+1.0)/2.0)*log2(n)
-                - (n*n)/2.0 * M_LOG2E
-                + (n+1.0)/2.0
-                + 0.5*log2(M_PI)
-                + (11.0/12.0) * M_LOG2E;
-  size_t bits = (size_t)ceil(log2En);
-  return (bits+PRIME_BITS-1)/PRIME_BITS;
 }
 
 typedef struct {
@@ -344,47 +334,6 @@ void *progress(void *_ud) {
   return NULL;
 }
 
-typedef struct { mpz_t X, M; } comb_ctx_t;
-
-static comb_ctx_t *comb_ctx_new() {
-  comb_ctx_t *ctx = malloc(sizeof(comb_ctx_t));
-  mpz_inits(ctx->X, ctx->M, NULL);
-  mpz_set_ui(ctx->X, 0);
-  mpz_set_ui(ctx->M, 1);
-  return ctx;
-}
-
-static void comb_ctx_free(comb_ctx_t *ctx) {
-  mpz_clears(ctx->X, ctx->M, NULL);
-  free(ctx);
-}
-
-static bool comb_ctx_add(comb_ctx_t *ctx, uint64_t res, uint64_t p) {
-  mpz_t u, inv, mz, rz, Xp;
-  mpz_inits(u, inv, mz, rz, Xp, NULL);
-
-  mpz_set(Xp, ctx->X);
-
-  mpz_set_ui(rz, res);
-  mpz_set_ui(mz, p);
-
-  mpz_mod(u, ctx->X, mz);
-  mpz_sub(u, rz, u);
-  mpz_mod(u, u, mz);
-
-  VERIFY(mpz_invert(inv, ctx->M, mz) != 0);
-
-  mpz_mul(u, u, inv);
-  mpz_mod(u, u, mz);
-  mpz_mul(inv, ctx->M, u);
-  mpz_add(ctx->X, ctx->X, inv);
-  mpz_mul(ctx->M, ctx->M, mz);
-
-  bool ret = mpz_cmp(ctx->X, Xp) == 0;
-  mpz_clears(u, inv, mz, rz, Xp, NULL);
-  return ret;
-}
-
 typedef enum {
   MODE_NONE = 0,
   MODE_PROCESS = (1 << 0),
@@ -516,22 +465,6 @@ static void proc_destroy(source_t *self) {
   free(st->ps);
   free(st);
   free(self);
-}
-
-#define P_STRIDE (1ULL << 10)
-
-static uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t *out_np) {
-  size_t np = primes_needed(n);
-  uint64_t *ps = malloc(np * sizeof(*ps));
-
-  uint64_t stride = P_STRIDE*m;
-  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
-  for (size_t i = 0; i < np; ++i) {
-    ps[i] = prime_congruent_1_mod_m(p_base, m);
-    p_base = ps[i] + stride;
-  }
-  *out_np = np;
-  return ps;
 }
 
 source_t *source_process_new(uint64_t n, uint64_t m_id) {

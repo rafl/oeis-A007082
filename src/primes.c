@@ -1,8 +1,13 @@
 #include "oeis.h"
+#include "debug.h"
 #include "primes.h"
 #include "maths.h"
 
+#include <stdlib.h>
+#include <math.h>
 #include <gmp.h>
+
+#define PRIME_BITS 61
 
 static int factor_u64(uint64_t m, uint64_t *pf, DEBUG_ARG size_t pfs, size_t *pcnt) {
   size_t k = 0;
@@ -60,4 +65,29 @@ uint64_t mth_root_mod_p(uint64_t p, uint64_t m) {
     }
     if (ok) return cand;
   }
+}
+
+static size_t primes_needed(uint64_t n) {
+  // theorem #4
+  double log2En = ((n-2.0)*(n+1.0)/2.0)*log2(n)
+                - (n*n)/2.0 * M_LOG2E
+                + (n+1.0)/2.0
+                + 0.5*log2(M_PI)
+                + (11.0/12.0) * M_LOG2E;
+  size_t bits = (size_t)ceil(log2En);
+  return (bits+PRIME_BITS-1)/PRIME_BITS;
+}
+
+uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t *out_np) {
+  size_t np = primes_needed(n);
+  uint64_t *ps = malloc(np * sizeof(*ps));
+
+  uint64_t stride = P_STRIDE*m;
+  uint64_t p_base = 1ULL + m*(((1ULL << (PRIME_BITS-1)) + m - 2) / m) + m_id*stride;
+  for (size_t i = 0; i < np; ++i) {
+    ps[i] = prime_congruent_1_mod_m(p_base, m);
+    p_base = ps[i] + stride;
+  }
+  *out_np = np;
+  return ps;
 }

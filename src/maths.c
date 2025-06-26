@@ -1,4 +1,4 @@
-#include "oeis.h"
+#include "debug.h"
 #include "maths.h"
 
 uint64_t add_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
