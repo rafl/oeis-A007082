@@ -17,7 +17,7 @@ static uint64_t m_for(uint64_t n) {
   return (n+3)/2;
 }
 
-void create_exps(size_t *ms, size_t len, uint64_t *dst) {
+static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   size_t idx = 0;
 
   for (size_t exp = 0; exp < len; ++exp) {
@@ -37,7 +37,7 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
   return j*m + k;
 }
 
-prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
+static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
   ctx->n = n;
   ctx->m = m;
@@ -107,7 +107,7 @@ static inline size_t binom_pos(size_t j, size_t k, size_t m) {
   return j*(m+1) + k;
 }
 
-void prim_ctx_free(prim_ctx_t *ctx) {
+static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->binoms);
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
@@ -116,7 +116,7 @@ void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-void composition_unrank(size_t *C, size_t rank, size_t m, size_t tot, size_t *vec) {
+static void composition_unrank(size_t *C, size_t rank, size_t m, size_t tot, size_t *vec) {
   for (size_t i=0; i<m-1; ++i) {
     size_t v = 0;
     for (;;) {
@@ -131,7 +131,7 @@ void composition_unrank(size_t *C, size_t rank, size_t m, size_t tot, size_t *ve
   vec[m-1] = tot;
 }
 
-uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
+static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2, *natM = ctx->nat_M, r = ctx->r;
   uint64_t acc = r, n = 0;
 
@@ -150,7 +150,7 @@ uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
   return mont_mul(acc, 1, p, p_dash);
 }
 
-uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
+static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2;
   uint64_t det = ctx->r;
 
@@ -189,7 +189,7 @@ uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   return det;
 }
 
-uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   uint64_t acc = ctx->r;
   for (size_t j = 0; j < ctx->n; ++j) {
     for (size_t k = j + 1; k < ctx->n; ++k) {
@@ -205,7 +205,7 @@ static inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
 }
 
 // TODO: move back into montgomery domain?
-uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
+static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   size_t c[m];
@@ -284,7 +284,7 @@ uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   return mul_mod_u64(prod_int, det_q, p);
 }
 
-uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
   return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
 }
 
