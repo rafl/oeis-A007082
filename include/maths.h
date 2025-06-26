@@ -10,4 +10,3 @@ uint64_t mul_mod_u64(uint64_t, uint64_t, uint64_t);
 uint64_t pow_mod_u64(uint64_t, uint64_t, uint64_t);
 uint64_t inv_mod_u64(uint64_t, uint64_t);
 uint64_t inv64_u64(uint64_t);
-int factor_u64(uint64_t, uint64_t *, DEBUG_ARG size_t, size_t *);

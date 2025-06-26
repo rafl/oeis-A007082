@@ -51,19 +51,3 @@ uint64_t inv64_u64(uint64_t p) {
   x *= 2 - p * x;
   return x;
 }
-
-int factor_u64(uint64_t m, uint64_t *pf, DEBUG_ARG size_t pfs, size_t *pcnt) {
-  size_t k = 0;
-  for (uint64_t d = 2; d * d <= m; ++d) {
-    if (m % d == 0) {
-      assert(k < pfs);
-      pf[k++] = d;
-      while (m % d == 0) m /= d;
-    }
-  }
-  assert(k < pfs);
-  if (m > 1) pf[k++] = m;
-  assert(k < pfs);
-  *pcnt = k;
-  return 0;
-}
