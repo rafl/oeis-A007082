@@ -20,13 +20,6 @@ static uint64_t m_for(uint64_t n) {
   return (n+3)/2;
 }
 
-void print_vec(const size_t *v, size_t len) {
-  putchar('[');
-  for (size_t i = 0; i < len; ++i)
-    printf("%zu%s", v[i], ((i+1==len) ? "" : ","));
-  puts("]");
-}
-
 void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   size_t idx = 0;
 
@@ -231,42 +224,12 @@ uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   return mont_mul(acc, 1, ctx->p, ctx->p_dash);
 }
 
-static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
-  const size_t r = dim+1;
-  const uint64_t p = ctx->p, m = ctx->m;
-
-  for (size_t j = 0; j < dim; ++j) {
-    uint64_t acc = 0;
-
-    for (size_t k = 0; k < r; ++k) if (j != k) {
-      const size_t pos = jk_pos(exps[j], exps[k], m);
-      uint64_t t = ctx->jk_prod_M[pos];
-
-      acc = add_mod_u64(acc, t, p);
-
-      if (k < dim) {
-        A[j*dim + k] = (t == 0) ? 0 : p - t;
-      }
-    }
-
-    A[j*dim + j] = acc;
-  }
-}
-
-uint64_t f_snd_trm(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  size_t dim = ctx->n-1;
-  uint64_t A[dim*dim];
-
-  build_drop_mat(A, dim, exps, ctx);
-  return mont_mul(det_mod_p(A, dim, ctx), 1, ctx->p, ctx->p_dash);
-}
-
 static inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   return (x >= y) ? x - y : x + p - y;
 }
 
 // TODO: move back into montgomery domain?
-uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   size_t c[m];
@@ -345,22 +308,8 @@ uint64_t f_snd_trm_fast(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
   return mul_mod_u64(prod_int, det_q, p);
 }
 
-uint64_t f_snd_trm_cmp(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  uint64_t slow = f_snd_trm(vec, exps, ctx);
-  uint64_t fast = f_snd_trm_fast(vec, exps, ctx);
-
-  if (fast != slow) {
-    print_vec(vec, ctx->m);
-    print_vec(exps, ctx->n);
-    printf("got %"PRIu64", wanted %"PRIu64" (mod %"PRIu64")\n\n", fast, slow, ctx->p);
-    abort();
-  }
-
-  return slow;
-}
-
 uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm_fast(vec, exps, ctx), ctx->p);
+  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
 }
 
 typedef struct {
