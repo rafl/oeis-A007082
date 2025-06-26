@@ -18,6 +18,11 @@ typedef struct {
   pthread_cond_t cv;
   pthread_mutex_t mu;
   struct timespec start;
+} progress_st_t;
+
+typedef struct {
+  progress_st_t st;
+  pthread_t prog;
 } progress_t;
 
 #if __APPLE__
@@ -27,7 +32,7 @@ typedef struct {
 #endif
 
 void *progress(void *_ud) {
-  progress_t *ud = _ud;
+  progress_st_t *ud = _ud;
   size_t tot = ud->tot;
   _Atomic size_t *done = ud->done;
 
@@ -334,6 +339,33 @@ typedef struct {
   size_t idx, np;
 } proc_state_t;
 
+void progress_start(progress_t *p, _Atomic size_t *done, size_t mss_siz) {
+  progress_st_t *st = &p->st;
+  *st = (progress_st_t){ .done = done, .tot = mss_siz, .quit = false };
+  pthread_mutex_init(&st->mu, NULL);
+  clock_gettime(_CLOCK, &st->start);
+  pthread_condattr_t ca;
+  pthread_condattr_init(&ca);
+#if !__APPLE__
+  pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+#endif
+  pthread_cond_init(&st->cv, &ca);
+  pthread_condattr_destroy(&ca);
+
+  pthread_create(&p->prog, NULL, progress, st);
+}
+
+void progress_stop(progress_t *restrict p) {
+  progress_st_t *st = &p->st;
+  pthread_mutex_lock(&st->mu);
+  st->quit = true;
+  pthread_cond_signal(&st->cv);
+  pthread_mutex_unlock(&st->mu);
+  pthread_join(p->prog, NULL);
+  pthread_cond_destroy(&st->cv);
+  pthread_mutex_destroy(&st->mu);
+}
+
 static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
@@ -341,22 +373,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   const size_t mss_siz = mss_iter_size(m, n);
 
   _Atomic size_t done = 0;
-  progress_t st = {
-    .done = &done, .tot = mss_siz, .quit = false, .mu = PTHREAD_MUTEX_INITIALIZER,
-#if __APPLE__
-    .cv = PTHREAD_COND_INITIALIZER
-#endif
-  };
-  clock_gettime(_CLOCK, &st.start);
-#if !__APPLE__
-  pthread_condattr_t ca;
-  pthread_condattr_init(&ca);
-  pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
-  pthread_cond_init(&st.cv, &ca);
-  pthread_condattr_destroy(&ca);
-#endif
-  pthread_t prog;
-  pthread_create(&prog, NULL, progress, &st);
+  progress_t prog;
+  progress_start(&prog, &done, mss_siz);
 
   _Atomic size_t next_rank = 0;
 
@@ -394,14 +412,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     acc = add_mod_u64(acc, l_acc, p);
   }
 
-  pthread_mutex_lock(&st.mu);
-  st.quit = true;
-  pthread_cond_signal(&st.cv);
-  pthread_mutex_unlock(&st.mu);
-  pthread_join(prog, NULL);
-  pthread_cond_destroy(&st.cv);
-  pthread_mutex_destroy(&st.mu);
-
+  progress_stop(&prog);
   prim_ctx_free(ctx);
   uint64_t denom = pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p);
   return mul_mod_u64(acc, denom, p);
