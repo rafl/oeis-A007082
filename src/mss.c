@@ -2,6 +2,7 @@
 #include "mss.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 void mss_iter_new(mss_iter_t *const it, size_t n, size_t r, size_t *vec, size_t *scratch) {
   it->n = n;
@@ -85,4 +86,80 @@ bool mss_iter(mss_iter_t *restrict it) {
 
   it->fin = true;
   return false;
+}
+
+void canon_iter_new(canon_iter_t *it, size_t m, size_t tot) {
+  it->m = m;
+  it->tot = tot;
+  it->vec = malloc(m*sizeof(size_t));
+  it->scratch = malloc((m+1)*sizeof(size_t));
+  memset(it->scratch, 0, sizeof(size_t) * (m + 1));
+
+  it->t = 1; // position
+  it->p = 1; // period length
+  it->sum = 0;
+  it->stage = ITER_STAGE_DESCEND;
+}
+
+void canon_iter_free(canon_iter_t *it) {
+  free(it->scratch);
+  free(it->vec);
+}
+
+bool canon_iter_next(canon_iter_t *it) {
+  const size_t m = it->m;
+  const size_t tot = it->tot;
+  size_t *a = it->scratch;
+
+  for (;;) {
+    switch (it->stage) {
+    case ITER_STAGE_DESCEND: {
+      if (it->t > m) { // leaf
+        it->stage = ITER_STAGE_BACKTRACK;
+        if (m % it->p == 0 && it->sum == tot) {
+          for (size_t i = 0; i < m; ++i)
+            it->vec[i] = a[i+1];
+          return true;
+        }
+        break;
+      }
+
+      size_t v = a[it->t - it->p];
+      if (it->sum + v <= tot) {
+        a[it->t] = v;
+        it->sum += v;
+        ++it->t;
+        break;
+      }
+
+      it->stage = ITER_STAGE_LOOP;
+      a[it->t] = v+1;
+      break;
+    }
+
+    case ITER_STAGE_LOOP: {
+      size_t v = a[it->t];
+      if (v > tot - it->sum) {
+        it->stage = ITER_STAGE_BACKTRACK;
+        break;
+      }
+
+      it->sum += v;
+      ++it->t;
+      it->p = it->t - 1;
+      it->stage = ITER_STAGE_DESCEND;
+      break;
+    }
+
+    case ITER_STAGE_BACKTRACK:
+      --it->t;
+      if (it->t == 0)
+        return false;
+
+      it->sum -= a[it->t];
+      a[it->t] += 1;
+      it->stage = ITER_STAGE_LOOP;
+      break;
+    }
+  }
 }

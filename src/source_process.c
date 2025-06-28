@@ -8,8 +8,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
-#include <stdio.h>
+
 #include <inttypes.h>
+#include <stdio.h>
 
 static uint64_t m_for(uint64_t n) {
   uint64_t x = (n+1)/2;
@@ -147,7 +148,9 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
     acc = mont_mul(acc, dinv, p, p_dash);
   }
 
-  return mont_mul(acc, 1, p, p_dash);
+  uint64_t ret = mont_mul(acc, 1, p, p_dash);
+  printf("%"PRIu64" * ", ret);
+  return ret;
 }
 
 static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
@@ -197,7 +200,9 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
       acc = mont_mul(acc, t, ctx->p, ctx->p_dash);
     }
   }
-  return mont_mul(acc, 1, ctx->p, ctx->p_dash);
+  uint64_t ret = mont_mul(acc, 1, ctx->p, ctx->p_dash);
+  printf("(1: %"PRIu64") ", ret);
+  return ret;
 }
 
 // TODO: move back into montgomery domain?
@@ -277,11 +282,23 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
     A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
   uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
   det_q = mul_mod_u64(det_q, inv_mod_u64(c[del_i], p), p);
-  return mul_mod_u64(prod_int, det_q, p);
+  uint64_t ret = mul_mod_u64(prod_int, det_q, p);
+  printf("(2: %"PRIu64") ", ret);
+  return ret;
 }
 
 static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
+  for (size_t i = 0; i < ctx->m; ++i)
+    printf("%"PRIu64" ", i == 0 ? vec[i]+1 : vec[i]);
+  printf("| ");
+  for (size_t i = 0; i < ctx->n; ++i)
+    printf("%"PRIu64" ", exps[i]);
+  uint64_t ret = mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
+  uint64_t w = mth_root_mod_p(ctx->p, ctx->m);
+  printf("=> %"PRIu64" | %"PRIu64" | %"PRIu64"\n", ret,
+    mul_mod_u64(ret, w, ctx->p),
+    mul_mod_u64(ret, mul_mod_u64(w, w, ctx->p), ctx->p));
+  return ret;
 }
 
 typedef struct {
@@ -307,6 +324,16 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     uint64_t exps[n], l_acc = 0;
     size_t vec[m], scratch[m];
     mss_iter_t it;
+    canon_iter_t can_it;
+
+    canon_iter_new(&can_it, m, n);
+    while (canon_iter_next(&can_it)) {
+      for (size_t i = 0; i < m; ++i) {
+        printf("%ld ", can_it.vec[i]);
+      }
+      printf("\n");
+    }
+    canon_iter_free(&can_it);
 
     #define CHUNK 1024
     size_t base;
@@ -347,7 +374,6 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
 
   *p = st->ps[st->idx++];
   *res = residue_for_prime(st->n, st->m, *p);
-  printf("%" PRIu64 " %% %" PRIu64 "\n", *res, *p);
   return 1;
 }
 

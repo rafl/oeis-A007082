@@ -55,6 +55,8 @@ int main (int argc, char **argv) {
   size_t i = 0;
   uint64_t res, p;
   while (src->next(src, &res, &p) > 0) {
+    if (mode & MODE_PROCESS)
+      printf("%"PRIu64" %% %"PRIu64"\n", res, p);
     if (mode & MODE_COMBINE) {
       converged = comb_ctx_add(crt, res, p);
 

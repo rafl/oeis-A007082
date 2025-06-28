@@ -23,14 +23,14 @@ static void *progress(void *_ud) {
     double eta = (d && d < tot) ? elapsed * (tot - d) / d : 0.0;
     int eh = elapsed / 3600, es = (int)elapsed % 60, em = ((int)elapsed / 60) % 60;
     int th = (eta / 3600), ts = (int)eta % 60, tm = ((int)eta / 60) % 60;
-    fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | ETA %02d:%02d:%02d",
-            pct, eh, em, es, th, tm, ts);
+    //fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | ETA %02d:%02d:%02d",
+    //        pct, eh, em, es, th, tm, ts);
     if (d >= tot) break;
     now.tv_sec += 1;
     pthread_cond_timedwait(&ud->cv, &ud->mu, &now);
   }
   pthread_mutex_unlock(&ud->mu);
-  fprintf(stderr, "\r");
+  //fprintf(stderr, "\r");
   return NULL;
 }
 
