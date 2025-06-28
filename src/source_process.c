@@ -6,6 +6,7 @@
 #include "progress.h"
 
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -301,34 +302,52 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
   _Atomic size_t next_rank = 0;
 
+  size_t vec[m];
+  mss_iter_w_t it;
+  mss_iter_w_new(&it, n, m, vec);
+
+  bool fin = false;
+  
   uint64_t acc = 0;
   #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
-    size_t vec[m], scratch[m];
-    mss_iter_t it;
-
-    #define CHUNK 1024
-    size_t base;
-    while ((base = atomic_fetch_add_explicit(&next_rank, CHUNK, memory_order_relaxed)) < mss_siz) {
-      size_t lim = base+CHUNK;
-      if (lim > mss_siz) lim = mss_siz;
-
-      composition_unrank(ctx->binoms, base, m, n-1, vec);
-      mss_iter_init_at(&it, m, n-1, vec, scratch);
-
-      for (size_t r = base; r < lim; ++r) {
-        create_exps(vec, m, exps);
-        uint64_t coeff = multinomial_mod_p(ctx, vec, m);
-        uint64_t f_n = mul_mod_u64(coeff, f(vec, exps, ctx), p);
-        l_acc = add_mod_u64(l_acc, f_n, p);
-
-        //if (r + 1 < lim)
-        //  VERIFY(mss_iter(&it));
-        mss_iter(&it);
-      }
-
-      atomic_fetch_add_explicit(&done, lim-base, memory_order_relaxed);
+    
+    while (!fin) {
+      #pragma omp critical
+      fin = mss_iter_w(&it);
+      
+      //loop over rotations, check for validity (vec[0] > 0)
+      bool one_calc = false;
+      size_t count = 0;
+      uint64_t f_0;
+      size_t r = 0;
+      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
+      while (count < m) {      
+        if (vec[0] > 0) {
+          if (!one_calc) {
+            create_exps(vec, m, exps);
+            f_0 = f(vec, exps, ctx);
+            one_calc = true;
+          }  
+          uint64_t f_n = mul_mod_u64(coeff, f_0, p);
+          l_acc = add_mod_u64(l_acc, f_n, p);   
+        }
+        
+        if (one_calc) {  
+          f_0 = mul_mod_u64(f_0, w, p); 
+          count += 1;
+        }
+        
+        //rotate the values of vec by 1 position
+        size_t tmp = vec[0];
+        for (size_t rr=1; rr < m; ++rr) {
+          vec[rr-1] = rr;
+        }
+        vec[m-1] = tmp;
+        
+        r = (r+1) % m;
+      }     
     }
 
     #pragma omp critical
