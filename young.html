@@ -1,0 +1,167 @@
+<html>
+  <head>
+    <style>
+      svg {
+        display: inline-block;
+        margin: .5em;
+      }
+      rect {
+        stroke: black;
+        fill: gold;
+      }
+      div.line {
+        border: 1px solid black;
+        background: black;
+        position: absolute;
+      }
+    </style>
+    <script>
+      const cellSize = 8;
+      const svgNamespace = "http://www.w3.org/2000/svg";
+      
+      function sum(arr) {
+        return arr.reduce((acc, d) => d+acc, 0);
+      }
+    
+      
+      function lyndonWords(len, opt_max=false) {
+        var max = opt_max;
+        const output = [];
+        if (!opt_max) {
+          max = len;
+        }
+        const w = [-1];
+        while (w.length > 0) {
+          w[w.length - 1] += 1;
+          const m = w.length;
+          if (m == len && sum(w) == max) {
+            output.push([...w].reverse());
+          }
+          while (w.length < len) {
+            w.push(w[w.length - m]);
+          }
+          while (w.length > 0 && w[w.length - 1] == max) {
+            w.pop();
+          }
+        }
+        if (max == len) {
+          output.push(new Array(len).fill(1));
+        }
+        return output;
+      }
+      
+      function findEdges(elements, fn = (e1, e2) => true) {
+        var edges = [];   
+        for (var i=0; i < elements.length; i++) {
+          for (var j=i+1; j < elements.length; j++) {
+            if (fn(elements[i].getAttribute("data").split(","), elements[j].getAttribute("data").split(","))) {
+              edges.push([elements[i], elements[j]]);
+              break;
+            }
+          }
+        }
+        return edges;
+      }   
+      
+      function youngDiagrams(n, opt_m=false) {
+        const m = opt_m || n;
+        const v = new Array(m).fill(0);
+        v[0] = n;
+        const diagrams = [[...v]];
+        var i = 0;
+        while (i < v.length - 1) {
+          var carry = -1;
+          for (i = 0; i < v.length - 1; i++) {
+            if (v[i] > (v[i+1] + 1)) {
+              v[i] -= 1;
+              v[i+1] += 1;
+              diagrams.push([...v]);
+              break;
+            }
+            else if (v[i] > v[i+1]) {
+              if (carry >= 0) {
+                v[carry] -= 1;
+                v[i+1] += 1;
+                diagrams.push([...v]);
+                break;  
+              }
+              else carry = i;
+            }
+          }
+        }
+        return diagrams;
+      }
+      
+      function drawYoungDiagram(v) {
+        var svg = document.createElementNS(svgNamespace, "svg");
+        const h = svg.style.height = Math.max(...v) * cellSize + 2;
+        const w = svg.style.width = v.length * cellSize + 2;
+        svg.setAttribute("data", v);
+        svg.setAttribute("height", h); 
+        svg.setAttribute("width", w);
+        for (var i = 0; i < v.length; i++) {
+          if (v[i] == 0) {
+            const rect = document.createElementNS(svgNamespace, "rect");
+            rect.setAttribute("y", h - 1 - .5);
+            rect.setAttribute("x", 1 + i*cellSize);
+            rect.setAttribute("height", .5);
+            rect.setAttribute("width", cellSize);
+            svg.appendChild(rect);
+          }
+          for (var j = 0; j < v[i]; j++) {
+            const rect = document.createElementNS(svgNamespace, "rect");
+            rect.setAttribute("y", h - 1 - j*cellSize - cellSize);
+            rect.setAttribute("x", 1 + i*cellSize);
+            rect.setAttribute("height", cellSize);
+            rect.setAttribute("width", cellSize);
+            svg.appendChild(rect);
+          }
+        }
+        document.body.append(svg);
+      }
+      
+      function inclusion(v1, v2) {
+        if (v1.length < v2.length) return inclusion(v2, v1);
+        return v1.reduce((acc,d,i) => {
+          if (i >= v2.length) return acc && (d == 0);
+          return acc && (d >= v2[i]);
+        }, true);
+      }
+      
+      window.onload = () => {
+        // drawYoungDiagram([3,2,1]);
+        // drawYoungDiagram([2,3,0,0,2]);
+        // const n3 = youngDiagramsForN(3);
+        // n3.forEach((d) => drawYoungDiagram(d));
+        for (var n = 3; n <= 9; n+= 2) {
+          var m = Math.ceil(n/2);
+          m += (1 - m%2);
+          document.body.innerHTML += `<h1>n=${n}</h1>Partitions<br>`;
+          const ds = youngDiagrams(n,m);
+          ds.forEach((d) => {
+            drawYoungDiagram(d);
+          });
+          const words = lyndonWords(m, n);
+          document.body.innerHTML += `<br>Necklaces<br>`;
+          words.forEach((d) => {
+            drawYoungDiagram(d);
+          });
+          document.body.innerHTML += `<br>Rotations<br>`;
+          words.forEach((d) => {
+            for (var i = 0; i < d.length; i++) {
+              d.push(d.shift());
+              if (d[0] > 0) {
+                drawYoungDiagram(d);
+              }
+            }
+          });
+          document.body.innerHTML += `<br><br>`;
+        }
+        const svgs = document.querySelectorAll("svg");
+        var edges = findEdges(svgs, inclusion);
+      }
+    </script>
+  </head>
+  <body>
+  </body>
+</html>
