@@ -117,21 +117,6 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-static void composition_unrank(size_t *C, size_t rank, size_t m, size_t tot, size_t *vec) {
-  for (size_t i=0; i<m-1; ++i) {
-    size_t v = 0;
-    for (;;) {
-      size_t cnt = C[binom_pos(tot-v+m-i-2, m-i-2, m)];
-      if (rank < cnt) break;
-      rank -= cnt;
-      ++v;
-    }
-    vec[i] = v;
-    tot -= v;
-  }
-  vec[m-1] = tot;
-}
-
 static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2, *natM = ctx->nat_M, r = ctx->r;
   uint64_t acc = r, n = 0;
@@ -306,6 +291,19 @@ typedef struct {
   size_t idx, np;
 } proc_state_t;
 
+void rot_vec(size_t *dst, size_t *src, size_t n, size_t m) {
+  assert(m > 1);
+  assert(n < m);
+
+  if (n == 0) {
+    memcpy(dst, src, m * sizeof(size_t));
+    return;
+  }
+
+  memcpy(dst, src + m - n, n * sizeof(size_t));
+  memcpy(dst + n, src, (m-n) * sizeof(size_t));
+}
+
 static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
@@ -316,49 +314,28 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   progress_t prog;
   progress_start(&prog, &done, mss_siz);
 
-  _Atomic size_t next_rank = 0;
-
   uint64_t acc = 0;
 //  #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
-    size_t vec[m], scratch[m+1];
-    mss_iter_t it;
+    size_t vec[m], vec_r[m], scratch[m+1];
     canon_iter_t can_it;
 
     canon_iter_new(&can_it, m, n, vec, scratch);
-
     while (canon_iter_next(&can_it)) {
-      for (size_t i = 0; i < m; ++i) {
-        printf("%ld ", vec[i]);
-      }
-      printf("\n");
-    }
-
-    #define CHUNK 1024
-    size_t base;
-    while ((base = atomic_fetch_add_explicit(&next_rank, CHUNK, memory_order_relaxed)) < mss_siz) {
-      size_t lim = base+CHUNK;
-      if (lim > mss_siz) lim = mss_siz;
-
-      composition_unrank(ctx->binoms, base, m, n-1, vec);
-      mss_iter_init_at(&it, m, n-1, vec, scratch);
-
-      for (size_t r = base; r < lim; ++r) {
-        create_exps(vec, m, exps);
-        uint64_t coeff = multinomial_mod_p(ctx, vec, m);
-        uint64_t f_n = mul_mod_u64(coeff, f(vec, exps, ctx), p);
+      memcpy(vec_r, vec, m*sizeof(size_t));
+      for (size_t r = 0; r < m; ++r) {
+        rot_vec(vec_r, vec, r, m);
+        if (vec_r[0] == 0) continue;
+        --vec_r[0];
+        create_exps(vec_r, m, exps);
+        uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
+        uint64_t f_n = mul_mod_u64(coeff, f(vec_r, exps, ctx), p);
         l_acc = add_mod_u64(l_acc, f_n, p);
-
-        //if (r + 1 < lim)
-        //  VERIFY(mss_iter(&it));
-        mss_iter(&it);
       }
-
-      atomic_fetch_add_explicit(&done, lim-base, memory_order_relaxed);
     }
 
-    #pragma omp critical
+//    #pragma omp critical
     acc = add_mod_u64(acc, l_acc, p);
   }
 
