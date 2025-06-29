@@ -18,6 +18,16 @@ static uint64_t m_for(uint64_t n) {
   return (n+3)/2;
 }
 
+static void create_exps_explicit(size_t *ms, size_t len, uint64_t *dst) {
+  size_t idx = 0;
+  ms[0] -= 1;
+  for (size_t exp = 0; exp < len; ++exp) {
+    for (size_t k = 0; k < ms[exp]; ++k)
+      dst[idx++] = exp;
+  }
+  dst[idx] = 0;
+}
+
 static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   size_t idx = 0;
 
@@ -208,7 +218,7 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   size_t c[m];
   // TODO: avoid copy? could adjust vec representation or handle vec[0] special below
   memcpy(c, vec, m*sizeof(size_t));
-  ++c[0];
+  // ++c[0];
 
   // active groups
   size_t typ[m], r = 0, del_i = 0;
@@ -296,11 +306,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
   const size_t mss_siz = mss_iter_size(m, n);
 
-  _Atomic size_t done = 0;
-  progress_t prog;
-  progress_start(&prog, &done, mss_siz);
-
-  _Atomic size_t next_rank = 0;
+  // progress_t prog;
+  // progress_start(&prog, &done, mss_siz);
 
   size_t vec[m];
   mss_iter_w_t it;
@@ -309,12 +316,10 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   bool fin = false;
   
   uint64_t acc = 0;
-  #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
     
     while (!fin) {
-      #pragma omp critical
       fin = mss_iter_w(&it);
       
       //loop over rotations, check for validity (vec[0] > 0)
@@ -326,7 +331,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
       while (count < m) {      
         if (vec[0] > 0) {
           if (!one_calc) {
-            create_exps(vec, m, exps);
+            create_exps_explicit(vec, m, exps);
             f_0 = f(vec, exps, ctx);
             one_calc = true;
           }  
@@ -346,15 +351,14 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         }
         vec[m-1] = tmp;
         
-        r = (r+1) % m;
+        r = (r+2) % m;
       }     
     }
 
-    #pragma omp critical
     acc = add_mod_u64(acc, l_acc, p);
   }
 
-  progress_stop(&prog);
+  // progress_stop(&prog);
   prim_ctx_free(ctx);
   uint64_t denom = pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p);
   return mul_mod_u64(acc, denom, p);
