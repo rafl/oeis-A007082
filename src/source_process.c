@@ -319,21 +319,21 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   _Atomic size_t next_rank = 0;
 
   uint64_t acc = 0;
-  #pragma omp parallel
+//  #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
-    size_t vec[m], scratch[m];
+    size_t vec[m], scratch[m+1];
     mss_iter_t it;
     canon_iter_t can_it;
 
-    canon_iter_new(&can_it, m, n);
+    canon_iter_new(&can_it, m, n, vec, scratch);
+
     while (canon_iter_next(&can_it)) {
       for (size_t i = 0; i < m; ++i) {
-        printf("%ld ", can_it.vec[i]);
+        printf("%ld ", vec[i]);
       }
       printf("\n");
     }
-    canon_iter_free(&can_it);
 
     #define CHUNK 1024
     size_t base;

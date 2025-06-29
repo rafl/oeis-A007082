@@ -24,6 +24,5 @@ typedef struct {
   canon_iter_stage_t stage;
 } canon_iter_t;
 
-void canon_iter_new(canon_iter_t *, size_t, size_t);
-void canon_iter_free(canon_iter_t *);
+void canon_iter_new(canon_iter_t *, size_t, size_t, size_t *, size_t *);
 bool canon_iter_next(canon_iter_t *);

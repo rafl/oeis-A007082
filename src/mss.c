@@ -88,22 +88,17 @@ bool mss_iter(mss_iter_t *restrict it) {
   return false;
 }
 
-void canon_iter_new(canon_iter_t *it, size_t m, size_t tot) {
+void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *vec, size_t *scratch) {
   it->m = m;
   it->tot = tot;
-  it->vec = malloc(m*sizeof(size_t));
-  it->scratch = malloc((m+1)*sizeof(size_t));
+  it->vec = vec;
+  it->scratch = scratch;
   memset(it->scratch, 0, sizeof(size_t) * (m + 1));
 
   it->t = 1; // position
   it->p = 1; // period length
   it->sum = 0;
   it->stage = ITER_STAGE_DESCEND;
-}
-
-void canon_iter_free(canon_iter_t *it) {
-  free(it->scratch);
-  free(it->vec);
 }
 
 bool canon_iter_next(canon_iter_t *it) {
@@ -117,8 +112,8 @@ bool canon_iter_next(canon_iter_t *it) {
       if (it->t > m) { // leaf
         it->stage = ITER_STAGE_BACKTRACK;
         if (m % it->p == 0 && it->sum == tot) {
-          for (size_t i = 0; i < m; ++i)
-            it->vec[i] = a[i+1];
+          it->vec[0] = a[m];
+          memcpy(it->vec+1, a+1, (m-1)*sizeof(size_t));
           return true;
         }
         break;
