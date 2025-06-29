@@ -26,6 +26,7 @@ static void create_exps_explicit(size_t *ms, size_t len, uint64_t *dst) {
       dst[idx++] = exp;
   }
   dst[idx] = 0;
+  ms[0] += 1;
 }
 
 static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
@@ -212,18 +213,19 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
 }
 
 // TODO: move back into montgomery domain?
-static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
+static uint64_t f_snd_trm(size_t *vec, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
-  size_t c[m];
-  // TODO: avoid copy? could adjust vec representation or handle vec[0] special below
-  memcpy(c, vec, m*sizeof(size_t));
-  // ++c[0];
+  // size_t c[m];
+  // // TODO: avoid copy? could adjust vec representation or handle vec[0] special below
+  // memcpy(c, vec, m*sizeof(size_t));
+  //
+  // // ++c[0];
 
   // active groups
   size_t typ[m], r = 0, del_i = 0;
   for (size_t i = 0; i < m; ++i) {
-    if (c[i]) {
+    if (vec[i]) {
       typ[r] = i;
       ++r;
     }
@@ -236,13 +238,13 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
       uint64_t w = ctx->jk_prod[jk_pos(i, j, m)];
-      sum = add_mod_u64(sum, mul_mod_u64(c[j], w, p), p);
+      sum = add_mod_u64(sum, mul_mod_u64(vec[j], w, p), p);
     }
     uint64_t d_i = sub_mod_u64(sum, ctx->jk_prod[jk_pos(i, i, m)], p);
     uint64_t lam_i = add_mod_u64(d_i, ctx->jk_prod[jk_pos(i, i, m)], p);
 
-    if (c[i] > 1)
-      prod_int = mul_mod_u64(prod_int, pow_mod_u64(lam_i, c[i] - 1, p), p);
+    if (vec[i] > 1)
+      prod_int = mul_mod_u64(prod_int, pow_mod_u64(lam_i, vec[i] - 1, p), p);
   }
 
   // quotient minor
@@ -253,27 +255,27 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
     size_t row = 0;
     for (size_t a = 0; a < r; ++a) {
       size_t i = typ[a];
-      if (i == del_i) continue;
+      if (i == 0) continue;
 
       uint64_t diag = 0;
       size_t col = 0;
 
       // contribution from the deleted block
-      uint64_t w_del = ctx->jk_prod[jk_pos(i, del_i, m)];
-      uint64_t val = mul_mod_u64(c[del_i], w_del, p);
+      uint64_t w_del = ctx->jk_prod[jk_pos(i, 0, m)];
+      uint64_t val = mul_mod_u64(vec[0], w_del, p);
       diag = add_mod_u64(diag, val, p);
 
       // remaining off-diagonal blocks
       for (size_t b = 0; b < r; ++b) {
         size_t j = typ[b];
-        if (j == del_i || j == i)
+        if (j == 0 || j == i)
           continue;
 
         if (col == row)
           ++col;
 
         uint64_t w = ctx->jk_prod[jk_pos(i, j, m)];
-        uint64_t v = mul_mod_u64(c[j], w, p);
+        uint64_t v = mul_mod_u64(vec[j], w, p);
 
         A[row*dim + col] = v ? p - v : 0;
         diag = add_mod_u64(diag, v, p);
@@ -287,11 +289,11 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   for (size_t i = 0; i < dim*dim; ++i)
     A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
   uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
-  det_q = mul_mod_u64(det_q, inv_mod_u64(c[del_i], p), p);
+  det_q = mul_mod_u64(det_q, inv_mod_u64(vec[0], p), p);
   return mul_mod_u64(prod_int, det_q, p);
 }
 
-static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f(size_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
   return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
 }
 
@@ -310,8 +312,9 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   // progress_start(&prog, &done, mss_siz);
 
   size_t vec[m];
+  size_t scratch[m];
   mss_iter_w_t it;
-  mss_iter_w_new(&it, n, m, vec);
+  mss_iter_w_new(&it, n, m, vec, scratch);
 
   bool fin = false;
   
@@ -321,18 +324,27 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     
     while (!fin) {
       fin = mss_iter_w(&it);
-      
+      printf("while\n");
       //loop over rotations, check for validity (vec[0] > 0)
       bool one_calc = false;
       size_t count = 0;
       uint64_t f_0;
       size_t r = 0;
       uint64_t coeff = multinomial_mod_p(ctx, vec, m);
-      while (count < m) {      
-        if (vec[0] > 0) {
+      while (count < m) {  
+        printf("\twhile ");   
+        if (vec[r] > 0) {
           if (!one_calc) {
-            create_exps_explicit(vec, m, exps);
-            f_0 = f(vec, exps, ctx);
+            
+            printf("f([");
+            for (size_t rr=0; rr < ctx->m; ++rr) {
+              printf("%d ", scratch[rr]);
+              scratch[rr] = vec[(m+r+rr)%m];
+            }
+            
+            create_exps_explicit(scratch, m, exps);
+            f_0 = f(scratch, exps, ctx);
+            printf("%"PRIu64"\n", f_0);
             one_calc = true;
           }  
           uint64_t f_n = mul_mod_u64(coeff, f_0, p);
@@ -345,11 +357,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         }
         
         //rotate the values of vec by 1 position
-        size_t tmp = vec[0];
-        for (size_t rr=1; rr < m; ++rr) {
-          vec[rr-1] = rr;
-        }
-        vec[m-1] = tmp;
+
         
         r = (r+2) % m;
       }     

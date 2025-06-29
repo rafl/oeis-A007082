@@ -2,43 +2,51 @@
 #include "mss.h"
 
 #include <string.h>
+#include <stdio.h>
 
-void mss_iter_w_new(mss_iter_w_t *const it, size_t n, size_t m, size_t *vec) {
+void mss_iter_w_new(mss_iter_w_t *const it, size_t n, size_t m, size_t *vec, size_t *scratch) {
   it->n = n;
   it->m = m;
   it->vec = vec;
   
-  it->pos = m;
+  it->pos = (size_t) 1;
   it->fin = false;
 
   //initialize with a zero-filled array with -1 in the final it->pos
   memset(vec, 0, m*sizeof(size_t));
-  vec[m-1] = (size_t) -1;
+  vec[0] = (size_t) -1;
+  
+  memset(scratch, 0, m*sizeof(size_t));
 }
 
 bool mss_iter_w(mss_iter_w_t *restrict it) {
   while (it->pos > 0) {
-    it->vec[it->pos - 1] += 1;
+    ++it->vec[it->pos - 1];
     size_t prev = it->pos;
     //prev_length == m checks for satisfaction as lyndon word, sum() == n is a filter for oeis use case
     size_t sum = 0;
     for (size_t i = 0; i < it->m; ++i) {
-      sum += it->vec[0];
+      it->scratch[it->m-1-i] = it->vec[i];
+      sum += it->vec[i];
     }
-    if (prev == it->m && sum == it->n) {
+    printf("||%d||", sum);
+    if (prev == (it->m) && sum == it->n) {
       return true;
     }
     //if it->pos is somewhere non-final, duplicate everything prior to it->pos into the cells after it->pos
     while (it->pos < it->m) {
+      printf("--%d->", it->pos);
       it->vec[it->pos] = it->vec[it->pos - prev];
-      it->pos += 1;
+      ++it->pos;
     }
     //if the value at it->pos is the maximum value, move leftward
     while (it->pos > 0 && it->vec[it->pos-1] == it->n) {
-      it->pos -= 1;
+      printf("<-%d--", it->pos);
+      --it->pos;
     }
   }
   //all done if it->pos == 0 and no new term was already returned
+  it->fin = true;
   return false;
 }
 
