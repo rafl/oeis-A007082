@@ -88,10 +88,9 @@ bool mss_iter(mss_iter_t *restrict it) {
   return false;
 }
 
-void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *vec, size_t *scratch) {
+void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch) {
   it->m = m;
   it->tot = tot;
-  it->vec = vec;
   it->scratch = scratch;
   memset(it->scratch, 0, sizeof(size_t) * (m + 1));
 
@@ -101,7 +100,7 @@ void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *vec, size_t 
   it->stage = ITER_STAGE_DESCEND;
 }
 
-bool canon_iter_next(canon_iter_t *it) {
+bool canon_iter_next(canon_iter_t *it, size_t *vec) {
   const size_t m = it->m;
   const size_t tot = it->tot;
   size_t *a = it->scratch;
@@ -112,8 +111,8 @@ bool canon_iter_next(canon_iter_t *it) {
       if (it->t > m) { // leaf
         it->stage = ITER_STAGE_BACKTRACK;
         if (m % it->p == 0 && it->sum == tot) {
-          it->vec[0] = a[m];
-          memcpy(it->vec+1, a+1, (m-1)*sizeof(size_t));
+          vec[0] = a[m];
+          memcpy(vec+1, a+1, (m-1)*sizeof(size_t));
           return true;
         }
         break;

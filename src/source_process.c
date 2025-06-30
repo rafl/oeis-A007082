@@ -306,8 +306,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     size_t vec[m], vec_r[m], scratch[m+1];
     canon_iter_t can_it;
 
-    canon_iter_new(&can_it, m, n, vec, scratch);
-    while (canon_iter_next(&can_it)) {
+    canon_iter_new(&can_it, m, n, scratch);
+    while (canon_iter_next(&can_it, vec)) {
       memcpy(vec_r, vec, m*sizeof(size_t));
       --vec_r[0];
       create_exps(vec_r, m, exps);
