@@ -26,3 +26,4 @@ typedef struct {
 
 void canon_iter_new(canon_iter_t *, size_t, size_t, size_t *, size_t *);
 bool canon_iter_next(canon_iter_t *);
+size_t canon_iter_size(size_t, size_t);

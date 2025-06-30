@@ -293,11 +293,11 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
-  const size_t mss_siz = mss_iter_size(m, n);
+  const size_t siz = canon_iter_size(m, n);
 
   _Atomic size_t done = 0;
   progress_t prog;
-  progress_start(&prog, &done, mss_siz);
+  progress_start(&prog, &done, siz);
 
   uint64_t acc = 0;
 //  #pragma omp parallel
@@ -321,6 +321,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
         l_acc = add_mod_u64(l_acc, f_n, p);
       }
+      atomic_fetch_add_explicit(&done, 1, memory_order_relaxed);
     }
 
 //    #pragma omp critical
