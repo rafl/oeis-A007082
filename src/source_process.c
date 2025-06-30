@@ -28,7 +28,6 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 
 typedef struct {
   uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M, *ws;
-  size_t *binoms;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -87,27 +86,12 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       ctx->jk_sums_M[pos] = mont_mul(jk_sums[pos], ctx->r2, p, ctx->p_dash);
     }
   }
-  size_t rows = (n-1) + m + 1, cols = m+1;
-  ctx->binoms = malloc(rows*cols*sizeof(size_t));
-  for (size_t j = 0; j < rows; ++j) {
-    for (size_t k = 0; k < cols; ++k) {
-      size_t v = (k == 0 || k == j) ? 1
-               : (k > j) ? 0
-               : ctx->binoms[(j-1)*cols + (k-1)] + ctx->binoms[(j-1)*cols + k];
-      ctx->binoms[j*cols + k] = v;
-    }
-  }
 
   return ctx;
 }
 
-static inline size_t binom_pos(size_t j, size_t k, size_t m) {
-  return j*(m+1) + k;
-}
-
 static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->ws);
-  free(ctx->binoms);
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
