@@ -312,7 +312,6 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
       --vec_r[0];
       create_exps(vec_r, m, exps);
       uint64_t f_0 = f(vec_r, exps, ctx);
-      ++vec_r[0];
       for (size_t r = 0; r < m; ++r) {
         rot_vec(vec_r, vec, r, m);
         if (vec_r[0] == 0) continue;
