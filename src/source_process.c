@@ -9,9 +9,6 @@
 #include <string.h>
 #include <stdatomic.h>
 
-#include <inttypes.h>
-#include <stdio.h>
-
 static uint64_t m_for(uint64_t n) {
   uint64_t x = (n+1)/2;
   if (x & 1) return x;
@@ -135,7 +132,6 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
   }
 
   uint64_t ret = mont_mul(acc, 1, p, p_dash);
-  printf("%"PRIu64" * ", ret);
   return ret;
 }
 
@@ -187,7 +183,6 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
     }
   }
   uint64_t ret = mont_mul(acc, 1, ctx->p, ctx->p_dash);
-  printf("(1: %"PRIu64") ", ret);
   return ret;
 }
 
@@ -269,22 +264,11 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
   det_q = mul_mod_u64(det_q, inv_mod_u64(c[del_i], p), p);
   uint64_t ret = mul_mod_u64(prod_int, det_q, p);
-  printf("(2: %"PRIu64") ", ret);
   return ret;
 }
 
 static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  for (size_t i = 0; i < ctx->m; ++i)
-    printf("%"PRIu64" ", i == 0 ? vec[i]+1 : vec[i]);
-  printf("| ");
-  for (size_t i = 0; i < ctx->n; ++i)
-    printf("%"PRIu64" ", exps[i]);
-  uint64_t ret = mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
-  uint64_t w = mth_root_mod_p(ctx->p, ctx->m);
-  printf("=> %"PRIu64" | %"PRIu64" | %"PRIu64"\n", ret,
-    mul_mod_u64(ret, w, ctx->p),
-    mul_mod_u64(ret, mul_mod_u64(w, w, ctx->p), ctx->p));
-  return ret;
+  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
 }
 
 typedef struct {
