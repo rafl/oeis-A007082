@@ -289,6 +289,10 @@ void rot_vec(size_t *dst, size_t *src, size_t n, size_t m) {
   memcpy(dst + n, src, (m-n) * sizeof(size_t));
 }
 
+static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
+  while (k--) canon_iter_next(it, vec);
+}
+
 static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
@@ -299,31 +303,50 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   progress_t prog;
   progress_start(&prog, &done, siz);
 
+  _Atomic size_t next_idx = 0;
+  #define CHUNK 4096
+
   uint64_t acc = 0;
-//  #pragma omp parallel
+  #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
     size_t vec[m], vec_r[m], scratch[m+1];
     canon_iter_t can_it;
 
     canon_iter_new(&can_it, m, n, scratch);
-    while (canon_iter_next(&can_it, vec)) {
-      memcpy(vec_r, vec, m*sizeof(size_t));
-      --vec_r[0];
-      create_exps(vec_r, m, exps);
-      uint64_t f_0 = f(vec_r, exps, ctx);
-      for (size_t r = 0; r < m; ++r) {
-        rot_vec(vec_r, vec, r, m);
-        if (vec_r[0] == 0) continue;
+    size_t l_rank = 0;
+
+    for (;;) {
+      size_t start = atomic_fetch_add_explicit(&next_idx, CHUNK, memory_order_relaxed);
+      if (start >= siz) break;
+      size_t delta = start - l_rank;
+      canon_iter_skip(&can_it, delta, vec);
+
+      size_t remaining = siz - start;
+      size_t block     = remaining < CHUNK ? remaining : CHUNK;
+      l_rank = start;
+
+      for (size_t c = 0; c < block; ++c) {
+        canon_iter_next(&can_it, vec);
+
+        memcpy(vec_r, vec, m*sizeof(size_t));
         --vec_r[0];
-        uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
-        uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
-        l_acc = add_mod_u64(l_acc, f_n, p);
+        create_exps(vec_r, m, exps);
+        uint64_t f_0 = f(vec_r, exps, ctx);
+        for (size_t r = 0; r < m; ++r) {
+          rot_vec(vec_r, vec, r, m);
+          if (vec_r[0] == 0) continue;
+          --vec_r[0];
+          uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
+          uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
+          l_acc = add_mod_u64(l_acc, f_n, p);
+        }
       }
-      atomic_fetch_add_explicit(&done, 1, memory_order_relaxed);
+      atomic_fetch_add_explicit(&done, block, memory_order_relaxed);
+      l_rank += block;
     }
 
-//    #pragma omp critical
+    #pragma omp critical
     acc = add_mod_u64(acc, l_acc, p);
   }
 
