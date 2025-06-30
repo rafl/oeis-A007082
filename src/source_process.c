@@ -30,7 +30,7 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M, *ws;
   size_t *binoms;
 } prim_ctx_t;
 
@@ -49,16 +49,16 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
 
   // TODO: move all of the locals into M-space for neatness. wouldn't really
   // affect total run-time cause it's all per-prime only.
-  uint64_t ws[m];
+  ctx->ws = malloc(m*sizeof(uint64_t));
   for (size_t i = 0; i < m; ++i)
-    ws[i] = pow_mod_u64(w, i, p);
+    ctx->ws[i] = pow_mod_u64(w, i, p);
   uint64_t ws_inv[m];
   for (size_t i = 0; i < m; ++i)
-    ws_inv[i] = inv_mod_u64(ws[i], p);
+    ws_inv[i] = inv_mod_u64(ctx->ws[i], p);
   uint64_t jk_pairs[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ws[j], ws_inv[k], p);
+      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ws_inv[k], p);
   }
   uint64_t jk_sums[m*m];
   for (size_t j = 0; j < m; ++j) {
@@ -109,6 +109,7 @@ static inline size_t binom_pos(size_t j, size_t k, size_t m) {
 }
 
 static void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->ws);
   free(ctx->binoms);
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
@@ -324,13 +325,16 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     canon_iter_new(&can_it, m, n, vec, scratch);
     while (canon_iter_next(&can_it)) {
       memcpy(vec_r, vec, m*sizeof(size_t));
+      --vec_r[0];
+      create_exps(vec_r, m, exps);
+      uint64_t f_0 = f(vec_r, exps, ctx);
+      ++vec_r[0];
       for (size_t r = 0; r < m; ++r) {
         rot_vec(vec_r, vec, r, m);
         if (vec_r[0] == 0) continue;
         --vec_r[0];
-        create_exps(vec_r, m, exps);
         uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
-        uint64_t f_n = mul_mod_u64(coeff, f(vec_r, exps, ctx), p);
+        uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
         l_acc = add_mod_u64(l_acc, f_n, p);
       }
     }
