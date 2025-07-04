@@ -303,7 +303,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         uint64_t f_0 = f(vec, exps, ctx);
         size_t vec_rots[2*m];
         memcpy(vec_rots, vec, m*sizeof(uint64_t));
-        memcpy(vec_rots+m, vec, m*sizeof(uint64_t));
+        memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
         for (size_t r = 0; r < m; ++r) {
           size_t *vec_r = vec_rots + r;
           if (vec_r[0] == 0) continue;
