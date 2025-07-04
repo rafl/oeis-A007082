@@ -64,3 +64,14 @@ uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
 inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   return (x >= y) ? x - y : x + p - y;
 }
+
+uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t r, uint64_t p, uint64_t p_dash) {
+    uint64_t acc = r;
+    while (e) {
+        if (e & 1)
+          acc = mont_mul(acc, b, p, p_dash);
+        b = mont_mul(b, b, p, p_dash);
+        e >>= 1;
+    }
+    return acc;
+}

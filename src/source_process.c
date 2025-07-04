@@ -28,7 +28,7 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *nat_inv, *jk_sums_M, *ws, *fact_M, *fact_inv_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *nat_inv_M, *jk_sums_M, *ws, *fact_M, *fact_inv_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -73,10 +73,10 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
   for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
-  ctx->nat_inv = malloc((n + 1) * sizeof(uint64_t));
-  ctx->nat_inv[0] = 0;
+  ctx->nat_inv_M = malloc((n + 1) * sizeof(uint64_t));
+  ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
-    ctx->nat_inv[k] = inv_mod_u64(k, p);
+    ctx->nat_inv_M[k] = mont_mul(inv_mod_u64(k, p), ctx->r2, p, ctx->p_dash);
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
@@ -104,7 +104,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->fact_M);
   free(ctx->ws);
   free(ctx->jk_sums_M);
-  free(ctx->nat_inv);
+  free(ctx->nat_inv_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
   free(ctx->jk_prod);
@@ -172,11 +172,9 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
       acc = mont_mul(acc, t, ctx->p, ctx->p_dash);
     }
   }
-  uint64_t ret = mont_mul(acc, 1, ctx->p, ctx->p_dash);
-  return ret;
+  return acc;
 }
 
-// TODO: move back into montgomery domain?
 static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
@@ -189,20 +187,21 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
     }
   }
 
-  uint64_t prod_int = 1;
+  uint64_t prod_M = ctx->r;
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
+    if (c[i] <= 0) continue;
+
     uint64_t sum = 0;
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
-      uint64_t w = ctx->jk_prod[jk_pos(i, j, m)];
-      sum = add_mod_u64(sum, mul_mod_u64(c[j], w, p), p);
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
     }
-    uint64_t d_i = sub_mod_u64(sum, ctx->jk_prod[jk_pos(i, i, m)], p);
-    uint64_t lam_i = add_mod_u64(d_i, ctx->jk_prod[jk_pos(i, i, m)], p);
 
-    if (c[i] > 1)
-      prod_int = mul_mod_u64(prod_int, pow_mod_u64(lam_i, c[i] - 1, p), p);
+    uint64_t d_i = sub_mod_u64(sum, ctx->jk_prod_M[jk_pos(i, i, m)], p);
+    uint64_t lam_i = add_mod_u64(d_i, ctx->jk_prod_M[jk_pos(i, i, m)], p);
+    prod_M = mont_mul(prod_M, mont_pow(lam_i, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
   }
 
   // quotient minor
@@ -219,8 +218,8 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
       size_t col = 0;
 
       // contribution from the deleted block
-      uint64_t w_del = ctx->jk_prod[jk_pos(i, del_i, m)];
-      uint64_t val = mul_mod_u64(c[del_i], w_del, p);
+      uint64_t w_del = ctx->jk_prod_M[jk_pos(i, del_i, m)];
+      uint64_t val = mont_mul(ctx->nat_M[c[del_i]], w_del, p, ctx->p_dash);
       diag = add_mod_u64(diag, val, p);
 
       // remaining off-diagonal blocks
@@ -232,8 +231,8 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
         if (col == row)
           ++col;
 
-        uint64_t w = ctx->jk_prod[jk_pos(i, j, m)];
-        uint64_t v = mul_mod_u64(c[j], w, p);
+        uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+        uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
 
         A[row*dim + col] = v ? p - v : 0;
         diag = add_mod_u64(diag, v, p);
@@ -244,16 +243,14 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
       ++row;
     }
   }
-  for (size_t i = 0; i < dim*dim; ++i)
-    A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
-  uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
-  det_q = mul_mod_u64(det_q, ctx->nat_inv[c[0]], p);
-  uint64_t ret = mul_mod_u64(prod_int, det_q, p);
-  return ret;
+  uint64_t det_q = dim ? det_mod_p(A, dim, ctx) : ctx->r;
+  det_q = mont_mul(det_q, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+  return mont_mul(prod_M, det_q, p, ctx->p_dash);
 }
 
 static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  return mul_mod_u64(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p);
+  uint64_t ret = mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+  return mont_mul(ret, 1, ctx->p, ctx->p_dash);
 }
 
 typedef struct {
