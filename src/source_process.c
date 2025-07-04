@@ -260,19 +260,6 @@ typedef struct {
   size_t idx, np;
 } proc_state_t;
 
-void rot_vec(size_t *dst, size_t *src, size_t n, size_t m) {
-  assert(m > 1);
-  assert(n < m);
-
-  if (n == 0) {
-    memcpy(dst, src, m * sizeof(size_t));
-    return;
-  }
-
-  memcpy(dst, src + m - n, n * sizeof(size_t));
-  memcpy(dst + n, src, (m-n) * sizeof(size_t));
-}
-
 static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
   while (k--) canon_iter_next(it, vec);
 }
@@ -314,9 +301,11 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         canon_iter_next(&can_it, vec);
         create_exps(vec, m, exps);
         uint64_t f_0 = f(vec, exps, ctx);
+        size_t vec_rots[2*m];
+        memcpy(vec_rots, vec, m*sizeof(uint64_t));
+        memcpy(vec_rots+m, vec, m*sizeof(uint64_t));
         for (size_t r = 0; r < m; ++r) {
-          size_t vec_r[m];
-          rot_vec(vec_r, vec, r, m);
+          size_t *vec_r = vec_rots + ((m - r) % m);
           if (vec_r[0] == 0) continue;
           uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
           uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
