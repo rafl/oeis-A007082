@@ -19,7 +19,8 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
   size_t idx = 0;
 
   for (size_t exp = 0; exp < len; ++exp) {
-    for (size_t k = 0; k < ms[exp]; ++k)
+    size_t reps = ms[exp] - (exp == 0);
+    for (size_t k = 0; k < reps; ++k)
       dst[idx++] = exp;
   }
 
@@ -174,13 +175,8 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
 }
 
 // TODO: move back into montgomery domain?
-static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
+static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
-
-  size_t c[m];
-  // TODO: avoid copy? could adjust vec representation or handle vec[0] special below
-  memcpy(c, vec, m*sizeof(size_t));
-  ++c[0];
 
   // active groups
   size_t typ[m], r = 0, del_i = 0;
@@ -318,7 +314,6 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         canon_iter_next(&can_it, vec);
 
         memcpy(vec_r, vec, m*sizeof(size_t));
-        --vec_r[0];
         create_exps(vec_r, m, exps);
         uint64_t f_0 = f(vec_r, exps, ctx);
         for (size_t r = 0; r < m; ++r) {
