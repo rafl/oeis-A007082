@@ -49,13 +49,10 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->ws = malloc(m*sizeof(uint64_t));
   for (size_t i = 0; i < m; ++i)
     ctx->ws[i] = pow_mod_u64(w, i, p);
-  uint64_t ws_inv[m];
-  for (size_t i = 0; i < m; ++i)
-    ws_inv[i] = inv_mod_u64(ctx->ws[i], p);
   uint64_t jk_pairs[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ws_inv[k], p);
+      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws[k ? m-k : 0], p);
   }
   uint64_t jk_sums[m*m];
   for (size_t j = 0; j < m; ++j) {
