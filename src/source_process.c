@@ -27,7 +27,7 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M, *ws;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M, *ws, *fact_M, *fact_inv_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -73,11 +73,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   for (size_t i = 0; i < m*m; ++i)
     ctx->jk_prod_M[i] = mont_mul(ctx->jk_prod[i], ctx->r2, p, ctx->p_dash);
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
-  // nat_M[0] is intentionally uninitialised to maximise developer engagement
-  // when that inevitably backfires. index is off by one to avoid extra maths
-  // during look-ups, which might be a premature optimisation. the extra word
-  // of memory doesn't matter.
-  for (size_t i = 1; i <= n; ++i)
+  for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
@@ -86,11 +82,24 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       ctx->jk_sums_M[pos] = mont_mul(jk_sums[pos], ctx->r2, p, ctx->p_dash);
     }
   }
+  ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
+  ctx->fact_M[0] = ctx->r;
+  for (size_t i = 1; i <= n; ++i)
+    ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
+  ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
+  ctx->fact_inv_M[n] = mont_mul(
+    inv_mod_u64(mont_mul(ctx->fact_M[n], 1, p, ctx->p_dash), p),
+    ctx->r2, p, ctx->p_dash
+  );
+  for (size_t i = n; i; --i)
+    ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);
 
   return ctx;
 }
 
 static void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->fact_inv_M);
+  free(ctx->fact_M);
   free(ctx->ws);
   free(ctx->jk_sums_M);
   free(ctx->nat_M);
@@ -100,23 +109,17 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
 }
 
 static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
-  const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2, *natM = ctx->nat_M, r = ctx->r;
-  uint64_t acc = r, n = 0;
+  const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
-  for (size_t i = 0; i < len; ++i) {
-    uint64_t d = r;
+  size_t tot = 0;
+  for (size_t i = 0; i < len; ++i)
+    tot += ms[i] - (i == 0);
 
-    for (size_t k = 1; k <= ms[i]; ++k) {
-      acc = mont_mul(acc, natM[++n], p, p_dash);
-      d = mont_mul(d, natM[k], p, p_dash);
-    }
+  uint64_t coeff = ctx->fact_M[tot];
+  for (size_t i = 0; i < len; ++i)
+    coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i] - (i == 0)], p, p_dash);
 
-    uint64_t dinv = mont_mul(inv_mod_u64(mont_mul(d, 1, p, p_dash), p), r2, p, p_dash);
-    acc = mont_mul(acc, dinv, p, p_dash);
-  }
-
-  uint64_t ret = mont_mul(acc, 1, p, p_dash);
-  return ret;
+  return mont_mul(coeff, 1, p, p_dash);
 }
 
 static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
@@ -246,6 +249,7 @@ static uint64_t f_snd_trm(uint64_t *vec, prim_ctx_t *ctx) {
   for (size_t i = 0; i < dim*dim; ++i)
     A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
   uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
+  // TODO: precompute inverses of c[del_i]
   det_q = mul_mod_u64(det_q, inv_mod_u64(c[del_i], p), p);
   uint64_t ret = mul_mod_u64(prod_int, det_q, p);
   return ret;
@@ -320,7 +324,6 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         for (size_t r = 0; r < m; ++r) {
           rot_vec(vec_r, vec, r, m);
           if (vec_r[0] == 0) continue;
-          --vec_r[0];
           uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
           uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
           l_acc = add_mod_u64(l_acc, f_n, p);
