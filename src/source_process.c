@@ -28,7 +28,7 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *jk_sums_M, *ws, *fact_M, *fact_inv_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *nat_inv, *jk_sums_M, *ws, *fact_M, *fact_inv_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -73,6 +73,10 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
   for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
+  ctx->nat_inv = malloc((n + 1) * sizeof(uint64_t));
+  ctx->nat_inv[0] = 0;
+  for (size_t k = 1; k <= n; ++k)
+    ctx->nat_inv[k] = inv_mod_u64(k, p);
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
@@ -100,6 +104,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->fact_M);
   free(ctx->ws);
   free(ctx->jk_sums_M);
+  free(ctx->nat_inv);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
   free(ctx->jk_prod);
@@ -242,8 +247,7 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   for (size_t i = 0; i < dim*dim; ++i)
     A[i] = mont_mul(A[i], ctx->r2, p, ctx->p_dash);
   uint64_t det_q = dim ? mont_mul(det_mod_p(A, dim, ctx), 1, p, ctx->p_dash) : 1;
-  // TODO: precompute inverses of c[del_i]
-  det_q = mul_mod_u64(det_q, inv_mod_u64(c[del_i], p), p);
+  det_q = mul_mod_u64(det_q, ctx->nat_inv[c[0]], p);
   uint64_t ret = mul_mod_u64(prod_int, det_q, p);
   return ret;
 }
