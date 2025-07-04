@@ -294,7 +294,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
   #pragma omp parallel
   {
     uint64_t exps[n], l_acc = 0;
-    size_t vec[m], vec_r[m], scratch[m+1];
+    size_t vec[m], scratch[m+1];
     canon_iter_t can_it;
 
     canon_iter_new(&can_it, m, n, scratch);
@@ -312,11 +312,10 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
       for (size_t c = 0; c < block; ++c) {
         canon_iter_next(&can_it, vec);
-
-        memcpy(vec_r, vec, m*sizeof(size_t));
-        create_exps(vec_r, m, exps);
-        uint64_t f_0 = f(vec_r, exps, ctx);
+        create_exps(vec, m, exps);
+        uint64_t f_0 = f(vec, exps, ctx);
         for (size_t r = 0; r < m; ++r) {
+          size_t vec_r[m];
           rot_vec(vec_r, vec, r, m);
           if (vec_r[0] == 0) continue;
           uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
