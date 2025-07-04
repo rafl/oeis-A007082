@@ -129,7 +129,7 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
 }
 
 static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
-  const uint64_t p = ctx->p, p_dash = ctx->p_dash, r2 = ctx->r2;
+  const uint64_t p = ctx->p, p_dash = ctx->p_dash;
   uint64_t det = ctx->r;
 
   for (size_t k = 0; k < dim; ++k) {
@@ -145,9 +145,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
       det = p - det;
     }
 
-    // eh whatever it's only like 20ish of these
-    // TODO: check to see if maybe we can compute some inverses outside of montgomery space upfront?
-    uint64_t inv_pivot = mont_mul(inv_mod_u64(mont_mul(A[k*dim + k], 1, p, p_dash), p), r2, p, p_dash);
+    uint64_t inv_pivot = mont_pow(A[k*dim + k], p-2, ctx->r, p, p_dash);
     det = mont_mul(det, A[k*dim + k], p, p_dash);
 
     for (size_t i = k + 1; i < dim; ++i) {
