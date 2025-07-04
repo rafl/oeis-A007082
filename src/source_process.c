@@ -28,7 +28,7 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *nat_inv_M, *jk_sums_M, *ws, *fact_M, *fact_inv_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *jk_prod, *nat_M, *nat_inv_M, *jk_sums_M, *ws, *ws_M, *fact_M, *fact_inv_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -49,6 +49,9 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->ws = malloc(m*sizeof(uint64_t));
   for (size_t i = 0; i < m; ++i)
     ctx->ws[i] = pow_mod_u64(w, i, p);
+  ctx->ws_M = malloc(m*sizeof(uint64_t));
+  for (size_t i = 0; i < m; ++i)
+    ctx->ws_M[i] = mont_mul(ctx->ws[i], ctx->r2, p, ctx->p_dash);
   uint64_t jk_pairs[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
@@ -102,6 +105,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
 static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->fact_inv_M);
   free(ctx->fact_M);
+  free(ctx->ws_M);
   free(ctx->ws);
   free(ctx->jk_sums_M);
   free(ctx->nat_inv_M);
@@ -122,7 +126,7 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
   for (size_t i = 0; i < len; ++i)
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i] - (i == 0)], p, p_dash);
 
-  return mont_mul(coeff, 1, p, p_dash);
+  return coeff;
 }
 
 static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
@@ -249,8 +253,7 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
 }
 
 static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
-  uint64_t ret = mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
-  return mont_mul(ret, 1, ctx->p, ctx->p_dash);
+  return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 typedef struct {
@@ -307,7 +310,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
           if (vec_r[0] == 0) continue;
           uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
           size_t idx = (2*r) % m;
-          uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[idx ? m-idx : 0], p), p);
+          uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
           l_acc = add_mod_u64(l_acc, f_n, p);
         }
       }
@@ -321,8 +324,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
   progress_stop(&prog);
   prim_ctx_free(ctx);
-  uint64_t denom = pow_mod_u64(pow_mod_u64(m % p, n - 1, p), p - 2, p);
-  return mul_mod_u64(acc, denom, p);
+  uint64_t denom = mont_pow(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), p-2, ctx->r, p, ctx->p_dash);
+  return mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
 }
 
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
