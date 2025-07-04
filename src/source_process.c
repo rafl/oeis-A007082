@@ -305,10 +305,11 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
         memcpy(vec_rots, vec, m*sizeof(uint64_t));
         memcpy(vec_rots+m, vec, m*sizeof(uint64_t));
         for (size_t r = 0; r < m; ++r) {
-          size_t *vec_r = vec_rots + ((m - r) % m);
+          size_t *vec_r = vec_rots + r;
           if (vec_r[0] == 0) continue;
           uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
-          uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[(2*r)%m], p), p);
+          size_t idx = (2*r) % m;
+          uint64_t f_n = mul_mod_u64(coeff, mul_mod_u64(f_0, ctx->ws[idx ? m-idx : 0], p), p);
           l_acc = add_mod_u64(l_acc, f_n, p);
         }
       }
