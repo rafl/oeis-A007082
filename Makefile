@@ -38,7 +38,7 @@ use:
 
 optimised:
 	$(MAKE) gen
-	./oeis 19
+	./oeis 17
 	$(MAKE) use
 
 $(TARGET): $(OBJS) | $(PGO_DIR)
