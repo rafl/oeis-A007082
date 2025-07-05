@@ -28,7 +28,7 @@ static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *nat_inv_M, *jk_sums_M, *ws, *ws_M, *fact_M, *fact_inv_M;
+  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *nat_inv_M, *jk_sums_M, *ws_M, *fact_M, *fact_inv_M;
 } prim_ctx_t;
 
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
@@ -44,35 +44,30 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
 
-  // TODO: move all of the locals into M-space for neatness. wouldn't really
-  // affect total run-time cause it's all per-prime only.
-  ctx->ws = malloc(m*sizeof(uint64_t));
-  for (size_t i = 0; i < m; ++i)
-    ctx->ws[i] = pow_mod_u64(w, i, p);
   ctx->ws_M = malloc(m*sizeof(uint64_t));
-  for (size_t i = 0; i < m; ++i)
-    ctx->ws_M[i] = mont_mul(ctx->ws[i], ctx->r2, p, ctx->p_dash);
-  uint64_t jk_pairs[m*m];
+  ctx->ws_M[0] = ctx->r;
+  ctx->ws_M[1] = mont_mul(w, ctx->r2, p, ctx->p_dash);
+  for (size_t i = 2; i < m; ++i)
+    ctx->ws_M[i] = mont_mul(ctx->ws_M[i-1], ctx->ws_M[1], p, ctx->p_dash);
+  uint64_t jk_pairs_M[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      jk_pairs[jk_pos(j, k, m)] = mul_mod_u64(ctx->ws[j], ctx->ws[k ? m-k : 0], p);
+      jk_pairs_M[jk_pos(j, k, m)] = mont_mul(ctx->ws_M[j], ctx->ws_M[k ? m-k : 0], p, ctx->p_dash);
   }
-  uint64_t jk_sums[m*m];
+  ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
-      jk_sums[jk_pos(j, k, m)] =
-        add_mod_u64(jk_pairs[jk_pos(j, k, m)], jk_pairs[jk_pos(k, j, m)], p);
+      ctx->jk_sums_M[jk_pos(j, k, m)] =
+        add_mod_u64(jk_pairs_M[jk_pos(j, k, m)], jk_pairs_M[jk_pos(k, j, m)], p);
   }
-  uint64_t jk_prod[m*m];
+  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
-      jk_prod[pos] = mul_mod_u64(jk_pairs[pos], inv_mod_u64(jk_sums[pos], p), p);
+      uint64_t sum_inv = mont_pow(ctx->jk_sums_M[pos], p-2, ctx->r, p, ctx->p_dash);
+      ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
     }
   }
-  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
-  for (size_t i = 0; i < m*m; ++i)
-    ctx->jk_prod_M[i] = mont_mul(jk_prod[i], ctx->r2, p, ctx->p_dash);
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
   for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
@@ -80,13 +75,6 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_mul(inv_mod_u64(k, p), ctx->r2, p, ctx->p_dash);
-  ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
-  for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k) {
-      size_t pos = jk_pos(j,k,m);
-      ctx->jk_sums_M[pos] = mont_mul(jk_sums[pos], ctx->r2, p, ctx->p_dash);
-    }
-  }
   ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
   ctx->fact_M[0] = ctx->r;
   for (size_t i = 1; i <= n; ++i)
@@ -106,7 +94,6 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->fact_inv_M);
   free(ctx->fact_M);
   free(ctx->ws_M);
-  free(ctx->ws);
   free(ctx->jk_sums_M);
   free(ctx->nat_inv_M);
   free(ctx->nat_M);
