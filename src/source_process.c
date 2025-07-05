@@ -180,7 +180,7 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups
-  size_t typ[m], r = 0, del_i = 0;
+  size_t typ[m], r = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
       typ[r] = i;
@@ -213,20 +213,20 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
     size_t row = 0;
     for (size_t a = 0; a < r; ++a) {
       size_t i = typ[a];
-      if (i == del_i) continue;
+      if (i == 0) continue;
 
       uint64_t diag = 0;
       size_t col = 0;
 
       // contribution from the deleted block
-      uint64_t w_del = ctx->jk_prod_M[jk_pos(i, del_i, m)];
-      uint64_t val = mont_mul(ctx->nat_M[c[del_i]], w_del, p, ctx->p_dash);
+      uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+      uint64_t val = mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
       diag = add_mod_u64(diag, val, p);
 
       // remaining off-diagonal blocks
       for (size_t b = 0; b < r; ++b) {
         size_t j = typ[b];
-        if (j == del_i || j == i)
+        if (j == 0 || j == i)
           continue;
 
         if (col == row)
