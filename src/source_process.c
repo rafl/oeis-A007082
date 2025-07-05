@@ -270,7 +270,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
   _Atomic size_t done = 0;
   progress_t prog;
-  progress_start(&prog, &done, siz);
+  progress_start(&prog, p, &done, siz);
 
   _Atomic size_t next_idx = 0;
   #define CHUNK 4096

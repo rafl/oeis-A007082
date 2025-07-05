@@ -1,6 +1,7 @@
 #include "progress.h"
 
 #include <stdio.h>
+#include <inttypes.h>
 
 #if __APPLE__
 #  define _CLOCK CLOCK_REALTIME
@@ -23,20 +24,20 @@ static void *progress(void *_ud) {
     double eta = (d && d < tot) ? elapsed * (tot - d) / d : 0.0;
     int eh = elapsed / 3600, es = (int)elapsed % 60, em = ((int)elapsed / 60) % 60;
     int th = (eta / 3600), ts = (int)eta % 60, tm = ((int)eta / 60) % 60;
-    fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | ETA %02d:%02d:%02d",
-            pct, eh, em, es, th, tm, ts);
+    fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | ETA %02d:%02d:%02d (%"PRIu64")",
+            pct, eh, em, es, th, tm, ts, ud->p);
     if (d >= tot) break;
     now.tv_sec += 1;
     pthread_cond_timedwait(&ud->cv, &ud->mu, &now);
   }
   pthread_mutex_unlock(&ud->mu);
-  fprintf(stderr, "\r");
+  fprintf(stderr, "\n");
   return NULL;
 }
 
-void progress_start(progress_t *p, _Atomic size_t *done, size_t tot) {
+void progress_start(progress_t *p, uint64_t prime, _Atomic size_t *done, size_t tot) {
   progress_st_t *st = &p->st;
-  *st = (progress_st_t){ .done = done, .tot = tot, .quit = false };
+  *st = (progress_st_t){ .p = prime, .done = done, .tot = tot, .quit = false };
   pthread_mutex_init(&st->mu, NULL);
   clock_gettime(_CLOCK, &st->start);
   pthread_condattr_t ca;
