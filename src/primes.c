@@ -7,7 +7,7 @@
 #include <math.h>
 #include <gmp.h>
 
-#define PRIME_BITS 61
+#define PRIME_BITS 63
 
 static int factor_u64(uint64_t m, uint64_t *pf, DEBUG_ARG size_t pfs, size_t *pcnt) {
   size_t k = 0;
