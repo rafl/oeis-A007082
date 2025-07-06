@@ -64,7 +64,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
-      uint64_t sum_inv = mont_pow(ctx->jk_sums_M[pos], p-2, ctx->r, p, ctx->p_dash);
+      uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, p, ctx->p_dash);
       ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
     }
   }
@@ -75,16 +75,13 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_mul(inv_mod_u64(k, p), ctx->r2, p, ctx->p_dash);
-  ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
+  ctx->fact_M = malloc(n*sizeof(uint64_t));
   ctx->fact_M[0] = ctx->r;
-  for (size_t i = 1; i <= n; ++i)
+  for (size_t i = 1; i < n; ++i)
     ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
-  ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
-  ctx->fact_inv_M[n] = mont_mul(
-    inv_mod_u64(mont_mul(ctx->fact_M[n], 1, p, ctx->p_dash), p),
-    ctx->r2, p, ctx->p_dash
-  );
-  for (size_t i = n; i; --i)
+  ctx->fact_inv_M = malloc(n*sizeof(uint64_t));
+  ctx->fact_inv_M[n-1] = mont_inv(ctx->fact_M[n-1], ctx->r, p, ctx->p_dash);
+  for (size_t i = n-1; i; --i)
     ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);
 
   return ctx;
@@ -132,7 +129,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
       det = p - det;
     }
 
-    uint64_t inv_pivot = mont_pow(A[k*dim + k], p-2, ctx->r, p, p_dash);
+    uint64_t inv_pivot = mont_inv(A[k*dim + k], ctx->r, p, p_dash);
     det = mont_mul(det, A[k*dim + k], p, p_dash);
 
     for (size_t i = k + 1; i < dim; ++i) {
@@ -308,7 +305,7 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
   progress_stop(&prog);
   prim_ctx_free(ctx);
-  uint64_t denom = mont_pow(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), p-2, ctx->r, p, ctx->p_dash);
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
   return mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
 }
 

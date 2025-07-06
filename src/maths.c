@@ -66,12 +66,16 @@ inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
 }
 
 uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t r, uint64_t p, uint64_t p_dash) {
-    uint64_t acc = r;
-    while (e) {
-        if (e & 1)
-          acc = mont_mul(acc, b, p, p_dash);
-        b = mont_mul(b, b, p, p_dash);
-        e >>= 1;
-    }
-    return acc;
+  uint64_t acc = r;
+  while (e) {
+    if (e & 1)
+      acc = mont_mul(acc, b, p, p_dash);
+    b = mont_mul(b, b, p, p_dash);
+    e >>= 1;
+  }
+  return acc;
+}
+
+uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
+  return mont_pow(x, p-2, r, p, p_dash);
 }
