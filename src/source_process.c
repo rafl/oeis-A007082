@@ -184,9 +184,7 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
       sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
     }
 
-    uint64_t d_i = sub_mod_u64(sum, ctx->jk_prod_M[jk_pos(i, i, m)], p);
-    uint64_t lam_i = add_mod_u64(d_i, ctx->jk_prod_M[jk_pos(i, i, m)], p);
-    prod_M = mont_mul(prod_M, mont_pow(lam_i, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
   }
 
   // quotient minor
