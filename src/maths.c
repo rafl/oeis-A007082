@@ -25,22 +25,6 @@ uint64_t pow_mod_u64(uint64_t b, uint64_t e, uint64_t p) {
   return r;
 }
 
-uint64_t inv_mod_u64(uint64_t x, uint64_t p) {
-  assert(p < (1ULL<<63));
-  assert(x < p);
-  int64_t t = 0, new_t = 1, r = (int64_t)p, new_r = (int64_t)x;
-
-  while (new_r) {
-    int64_t tmp, q = r / new_r;
-    tmp = r - q * new_r; r = new_r; new_r = tmp;
-    tmp = t - q * new_t; t = new_t; new_t = tmp;
-  }
-
-  assert(r == 1);
-  if (t < 0) t += p;
-  return (uint64_t)t;
-}
-
 uint64_t inv64_u64(uint64_t p) {
   uint64_t x = 1;
   x *= 2 - p * x;

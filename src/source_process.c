@@ -74,7 +74,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->nat_inv_M = malloc((n + 1) * sizeof(uint64_t));
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
-    ctx->nat_inv_M[k] = mont_mul(inv_mod_u64(k, p), ctx->r2, p, ctx->p_dash);
+    ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
   ctx->fact_M = malloc(n*sizeof(uint64_t));
   ctx->fact_M[0] = ctx->r;
   for (size_t i = 1; i < n; ++i)
