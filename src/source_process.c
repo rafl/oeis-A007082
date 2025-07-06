@@ -10,9 +10,7 @@
 #include <stdatomic.h>
 
 static uint64_t m_for(uint64_t n) {
-  uint64_t x = (n+1)/2;
-  if (x & 1) return x;
-  return (n+3)/2;
+  return 2*((n+1)/4)+1;
 }
 
 static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
