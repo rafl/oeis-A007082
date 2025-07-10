@@ -333,9 +333,11 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
 
   proc_state_t *st = malloc(sizeof(*st));
+  assert(st);
   *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet };
 
   source_t *src = malloc(sizeof *src);
+  assert(src);
   *src = (source_t){ .next = proc_next, .destroy = proc_destroy, .state = st };
   return src;
 }
