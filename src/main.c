@@ -31,15 +31,17 @@ static uint64_t parse_uint(const char *s) {
 int main (int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
+  bool quiet = false;
 
   for (;;) {
-    int c = getopt(argc, argv, "m:pc");
+    int c = getopt(argc, argv, "m:pcq");
     if (c == -1) break;
 
     switch (c) {
       case 'm': m_id = parse_uint(optarg); break;
       case 'p': mode |= MODE_PROCESS; break;
       case 'c': mode |= MODE_COMBINE; break;
+      case 'q': quiet = true; break;
     }
   }
   assert(mode < MODE_LAST);
@@ -48,7 +50,7 @@ int main (int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id) : source_stdin_new();
+  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id, quiet) : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
   bool converged = false;
@@ -61,8 +63,11 @@ int main (int argc, char **argv) {
       converged = comb_ctx_add(crt, res, p);
 
       if (i > 0) {
-        gmp_printf("e(%"PRIu64") %s %Zd\n  after %zu primes, mod %Zd\n",
-                   n, converged ? "=" : ">=", crt->X, i+1, crt->M);
+        if (quiet)
+          gmp_printf("%Zd\n", crt->X);
+        else
+          gmp_printf("e(%"PRIu64") %s %Zd\n  after %zu primes, mod %Zd\n",
+                     n, converged ? "=" : ">=", crt->X, i+1, crt->M);
         if (converged && mode & MODE_PROCESS) break;
       }
       ++i;

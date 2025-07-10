@@ -236,13 +236,14 @@ static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
 typedef struct {
   uint64_t n, m, *ps;
   size_t idx, np;
+  bool quiet;
 } proc_state_t;
 
 static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
   while (k--) canon_iter_next(it, vec);
 }
 
-static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
+static uint64_t residue_for_prime(bool quiet, uint64_t n, uint64_t m, uint64_t p) {
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
@@ -250,7 +251,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
 
   _Atomic size_t done = 0;
   progress_t prog;
-  progress_start(&prog, p, &done, siz);
+  if (!quiet)
+    progress_start(&prog, p, &done, siz);
 
   _Atomic size_t next_idx = 0;
   #define CHUNK 4096
@@ -299,7 +301,8 @@ static uint64_t residue_for_prime(uint64_t n, uint64_t m, uint64_t p) {
     acc = add_mod_u64(acc, l_acc, p);
   }
 
-  progress_stop(&prog);
+  if (!quiet)
+    progress_stop(&prog);
   prim_ctx_free(ctx);
   uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
   return mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
@@ -310,7 +313,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
   if (st->idx == st->np) return 0;
 
   *p = st->ps[st->idx++];
-  *res = residue_for_prime(st->n, st->m, *p);
+  *res = residue_for_prime(st->quiet, st->n, st->m, *p);
   return 1;
 }
 
@@ -323,14 +326,14 @@ static void proc_destroy(source_t *self) {
 
 #define P_STRIDE (1ULL << 10)
 
-source_t *source_process_new(uint64_t n, uint64_t m_id) {
+source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
   uint64_t m = m_for(n);
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
 
   proc_state_t *st = malloc(sizeof(*st));
-  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps };
+  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet };
 
   source_t *src = malloc(sizeof *src);
   *src = (source_t){ .next = proc_next, .destroy = proc_destroy, .state = st };
