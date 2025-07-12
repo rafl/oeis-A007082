@@ -24,6 +24,11 @@ jobs:
         run: |
           brew update
           brew install gcc
+      - name: Install llvm (macOS)
+        if: matrix.os == 'macos-latest' && matrix.compiler == 'clang'
+        run: |
+          brew update
+          brew install llvm libomp
       - name: Build
         run: make optimised
         env:
