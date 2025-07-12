@@ -1,0 +1,34 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ${{ matrix.compiler }} (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.compiler }}
+      - name: Install gcc (macOS)
+        if: matrix.os == 'macos-latest' && matrix.compiler == 'gcc'
+        run: |
+          brew update
+          brew install gcc
+      - name: Build
+        run: make optimised
+        env:
+          CC: ${{ matrix.compiler }}
+      - name: Run test suite
+        run: make test
+        env:
+          CC: ${{ matrix.compiler }}
