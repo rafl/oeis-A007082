@@ -303,9 +303,10 @@ static uint64_t residue_for_prime(bool quiet, uint64_t n, uint64_t m, uint64_t p
 
   if (!quiet)
     progress_stop(&prog);
-  prim_ctx_free(ctx);
   uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
-  return mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
+  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
+  prim_ctx_free(ctx);
+  return ret;
 }
 
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
