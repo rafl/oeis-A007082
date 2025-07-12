@@ -1,4 +1,4 @@
-CFLAGS := -g -std=gnu18 -O0 -march=native -flto -fopenmp -Wall -Wextra -fanalyzer -fstack-protector-strong -D_FORTIFY_SOURCE=2\
+CFLAGS := -g -std=gnu18 -O3 -march=native -flto -fopenmp -Wall -Wextra -fanalyzer -fstack-protector-strong -D_FORTIFY_SOURCE=2\
           $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
