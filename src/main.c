@@ -63,11 +63,12 @@ int main (int argc, char **argv) {
       converged = comb_ctx_add(crt, res, p);
 
       if (i > 0) {
-        if (quiet)
-          gmp_printf("%Zd\n", crt->X);
-        else
+        if (quiet) {
+          if (converged) gmp_printf("%Zd\n", crt->X);
+        } else {
           gmp_printf("e(%"PRIu64") %s %Zd\n  after %zu primes, mod %Zd\n",
                      n, converged ? "=" : ">=", crt->X, i+1, crt->M);
+        }
         if (converged && mode & MODE_PROCESS) break;
       }
       ++i;
@@ -76,8 +77,12 @@ int main (int argc, char **argv) {
   src->destroy(src);
 
   if (mode & MODE_COMBINE) {
-    if (!converged)
-      gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", crt->X, crt->M);
+    if (!converged) {
+      if (quiet)
+        gmp_printf("%Zd\n", crt->X);
+      else
+        gmp_printf("(INCOMPLETE) e_n = %Zd (mod %Zd)\n", crt->X, crt->M);
+    }
     comb_ctx_free(crt);
   }
 
