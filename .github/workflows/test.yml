@@ -18,7 +18,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ${{ matrix.compiler }}
+          sudo apt-get install -y ${{ matrix.compiler }} libomp-dev
       - name: Install gcc (macOS)
         if: matrix.os == 'macos-latest' && matrix.compiler == 'gcc'
         run: |
