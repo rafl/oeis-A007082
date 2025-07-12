@@ -59,4 +59,4 @@ pgo-clean:
 	@rm -rf $(PGO_DIR)
 
 test: $(TARGET)
-	@echo "TODO"
+	@bash test.sh
