@@ -35,6 +35,7 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
 
 static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
+  assert(ctx);
   ctx->n = n;
   ctx->m = m;
   ctx->p = p;
@@ -43,6 +44,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
 
   ctx->ws_M = malloc(m*sizeof(uint64_t));
+  assert(ctx->ws_M);
   ctx->ws_M[0] = ctx->r;
   ctx->ws_M[1] = mont_mul(w, ctx->r2, p, ctx->p_dash);
   for (size_t i = 2; i < m; ++i)
@@ -53,12 +55,14 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       jk_pairs_M[jk_pos(j, k, m)] = mont_mul(ctx->ws_M[j], ctx->ws_M[k ? m-k : 0], p, ctx->p_dash);
   }
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
+  assert(ctx->jk_sums_M);
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
       ctx->jk_sums_M[jk_pos(j, k, m)] =
         add_mod_u64(jk_pairs_M[jk_pos(j, k, m)], jk_pairs_M[jk_pos(k, j, m)], p);
   }
   ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  assert(ctx->jk_prod_M);
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
@@ -67,17 +71,21 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
     }
   }
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
+  assert(ctx->nat_M);
   for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
   ctx->nat_inv_M = malloc((n + 1) * sizeof(uint64_t));
+  assert(ctx->nat_inv_M);
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
   ctx->fact_M = malloc(n*sizeof(uint64_t));
+  assert(ctx->fact_M);
   ctx->fact_M[0] = ctx->r;
   for (size_t i = 1; i < n; ++i)
     ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
   ctx->fact_inv_M = malloc(n*sizeof(uint64_t));
+  assert(ctx->fact_inv_M);
   ctx->fact_inv_M[n-1] = mont_inv(ctx->fact_M[n-1], ctx->r, p, ctx->p_dash);
   for (size_t i = n-1; i; --i)
     ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);

@@ -1,3 +1,4 @@
+#include "debug.h"
 #include "source_combine.h"
 
 #include <stdio.h>
@@ -14,6 +15,7 @@ static void stdin_destroy(source_t *src) {
 
 source_t *source_stdin_new(void) {
   source_t *src = malloc(sizeof *src);
+  assert(src);
   *src = (source_t){ .next = stdin_next, .destroy = stdin_destroy, .state = NULL };
   return src;
 }
