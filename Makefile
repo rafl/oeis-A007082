@@ -24,7 +24,7 @@ DEPS := $(OBJS:.o=.d)
 
 TARGET := oeis
 
-.PHONY: all gen use optimised clean pgo-clean
+.PHONY: all gen use optimised clean pgo-clean test
 
 all: $(TARGET)
 
@@ -57,3 +57,6 @@ clean:
 
 pgo-clean:
 	@rm -rf $(PGO_DIR)
+
+test: $(TARGET)
+	@echo "TODO"
