@@ -123,25 +123,11 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   uint64_t det = ctx->r;
 
   for (size_t k = 0; k < dim; ++k) {
-    size_t pivot = k;
-    while (pivot < dim && A[pivot*dim + k] == 0) ++pivot;
-    if (pivot == dim) return 0;
-    if (pivot != k) {
-      for (size_t j = 0; j < dim; ++j) {
-        uint64_t tmp = A[k*dim + j];
-        A[k*dim + j] = A[pivot*dim + j];
-        A[pivot*dim + j] = tmp;
-      }
-      det = p - det;
-    }
-
     uint64_t inv_pivot = mont_inv(A[k*dim + k], ctx->r, p, p_dash);
     det = mont_mul(det, A[k*dim + k], p, p_dash);
 
     for (size_t i = k + 1; i < dim; ++i) {
       uint64_t factor = mont_mul(A[i*dim + k], inv_pivot, p, p_dash);
-      if (factor == 0) continue;
-
       for (size_t j = k; j < dim; ++j) {
         uint64_t tmp = mont_mul(factor, A[k*dim + j], p, p_dash);
         uint64_t val = (A[i*dim + j] >= tmp)
