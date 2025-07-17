@@ -39,7 +39,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->n = n;
   ctx->m = m;
   ctx->p = p;
-  ctx->p_dash = (uint64_t)(0 - inv64_u64(p));
+  ctx->p_dash = (uint64_t)(-inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
 
@@ -123,17 +123,15 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   uint64_t det = ctx->r;
 
   for (size_t k = 0; k < dim; ++k) {
-    uint64_t inv_pivot = mont_inv(A[k*dim + k], ctx->r, p, p_dash);
-    det = mont_mul(det, A[k*dim + k], p, p_dash);
+    uint64_t pivot = A[k*dim + k];
+    uint64_t inv_pivot = mont_inv(pivot, ctx->r, p, p_dash);
+    det = mont_mul(det, pivot, p, p_dash);
 
     for (size_t i = k + 1; i < dim; ++i) {
       uint64_t factor = mont_mul(A[i*dim + k], inv_pivot, p, p_dash);
       for (size_t j = k; j < dim; ++j) {
         uint64_t tmp = mont_mul(factor, A[k*dim + j], p, p_dash);
-        uint64_t val = (A[i*dim + j] >= tmp)
-                     ? A[i*dim + j] - tmp
-                     : A[i*dim + j] + p - tmp;
-        A[i*dim + j] = val;
+        A[i*dim + j] = sub_mod_u64(A[i*dim + j], tmp, p);
       }
     }
   }
@@ -167,8 +165,6 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   uint64_t prod_M = ctx->r;
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
-    if (c[i] <= 0) continue;
-
     uint64_t sum = 0;
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
@@ -179,48 +175,38 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
     prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
   }
 
+  prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+
   // quotient minor
   size_t dim = r - 1;
-  uint64_t A[dim ? dim*dim : 1];
+  if (!dim)
+    return prod_M;
 
-  if (dim) {
-    size_t row = 0;
-    for (size_t a = 0; a < r; ++a) {
-      size_t i = typ[a];
-      if (i == 0) continue;
+  uint64_t A[dim*dim];
+  for (size_t a = 1; a < r; ++a) {
+    size_t i = typ[a];
 
-      uint64_t diag = 0;
-      size_t col = 0;
+    // contribution from the deleted block
+    uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+    uint64_t diag = mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
 
-      // contribution from the deleted block
-      uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
-      uint64_t val = mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
-      diag = add_mod_u64(diag, val, p);
+    // remaining off-diagonal blocks
+    for (size_t b = 1; b < r; ++b) {
+      size_t j = typ[b];
+      if (j == i)
+        continue;
 
-      // remaining off-diagonal blocks
-      for (size_t b = 0; b < r; ++b) {
-        size_t j = typ[b];
-        if (j == 0 || j == i)
-          continue;
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
 
-        if (col == row)
-          ++col;
-
-        uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
-        uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
-
-        A[row*dim + col] = v ? p - v : 0;
-        diag = add_mod_u64(diag, v, p);
-        ++col;
-      }
-
-      A[row*dim + row] = diag;
-      ++row;
+      A[(a-1)*dim + (b-1)] = p - v;
+      diag = add_mod_u64(diag, v, p);
     }
+
+    A[(a-1)*dim + (a-1)] = diag;
   }
-  uint64_t det_q = dim ? det_mod_p(A, dim, ctx) : ctx->r;
-  det_q = mont_mul(det_q, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
-  return mont_mul(prod_M, det_q, p, ctx->p_dash);
+
+  return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
 static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
