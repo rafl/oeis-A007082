@@ -4,6 +4,8 @@ LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
 PGO ?= none
 PGO_DIR ?= build/pgo
+PROFDATA := $(PGO_DIR)/default.profdata
+IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -q clang && echo 1)
 
 ifeq ($(PGO),gen)
 CFLAGS += -fprofile-generate=$(PGO_DIR)
@@ -26,7 +28,10 @@ TARGET := oeis
 
 .PHONY: all gen use optimised clean pgo-clean test
 
-all: $(TARGET)
+all: $(if $(filter use,$(PGO)),$(PROFDATA)) $(TARGET)
+
+$(PROFDATA):
+	[ "$(IS_CLANG)" != "1" ] || llvm-profdata merge -output=$@ $(PGO_DIR)/default_*.profraw
 
 gen:
 	$(MAKE) clean
