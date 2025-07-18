@@ -64,4 +64,4 @@ pgo-clean:
 	@rm -rf $(PGO_DIR)
 
 test: $(TARGET)
-	@bash test.sh
+	@bash test.sh $(N)

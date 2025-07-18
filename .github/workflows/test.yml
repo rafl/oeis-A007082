@@ -34,6 +34,6 @@ jobs:
         env:
           CC: ${{ matrix.compiler }}
       - name: Run test suite
-        run: make test
+        run: make test N=11
         env:
           CC: ${{ matrix.compiler }}
