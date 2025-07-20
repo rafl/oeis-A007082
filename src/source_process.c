@@ -141,11 +141,8 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
     for (size_t i = k + 1; i < dim; ++i) {
       scaling_factor = mont_mul(scaling_factor, pivot, p, p_dash);
       uint64_t multiplier = A[i*dim + k];
-      for (size_t j = k; j < dim; ++j) {
-        uint64_t scaled_element = mont_mul(A[i*dim + j], pivot, p, p_dash);
-        uint64_t elimination_term = mont_mul(A[k*dim + j], multiplier, p, p_dash);
-        A[i*dim + j] = sub_mod_u64(scaled_element, elimination_term, p);
-      }
+      for (size_t j = k; j < dim; ++j)
+        A[i*dim + j] = mont_mul_sub(A[i*dim + j], pivot, A[k*dim + j], multiplier, p, p_dash);
     }
   }
 
