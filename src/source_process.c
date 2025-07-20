@@ -120,7 +120,7 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
 
 static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t det = ctx->r;
+  uint64_t det = ctx->r, scaling_factor = ctx->r;
 
   for (size_t k = 0; k < dim; ++k) {
     size_t pivot_i = k;
@@ -136,20 +136,20 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
     }
 
     uint64_t pivot = A[k*dim + k];
-    uint64_t inv_pivot = mont_inv(pivot, ctx->r, p, p_dash);
     det = mont_mul(det, pivot, p, p_dash);
 
     for (size_t i = k + 1; i < dim; ++i) {
-      uint64_t factor = mont_mul(A[i*dim + k], inv_pivot, p, p_dash);
-      if (factor == 0) continue;
+      scaling_factor = mont_mul(scaling_factor, pivot, p, p_dash);
+      uint64_t multiplier = A[i*dim + k];
       for (size_t j = k; j < dim; ++j) {
-        uint64_t tmp = mont_mul(factor, A[k*dim + j], p, p_dash);
-        A[i*dim + j] = sub_mod_u64(A[i*dim + j], tmp, p);
+        uint64_t scaled_element = mont_mul(A[i*dim + j], pivot, p, p_dash);
+        uint64_t elimination_term = mont_mul(A[k*dim + j], multiplier, p, p_dash);
+        A[i*dim + j] = sub_mod_u64(scaled_element, elimination_term, p);
       }
     }
   }
 
-  return det;
+  return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
 static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
