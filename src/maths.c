@@ -67,8 +67,8 @@ uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
 uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2, uint64_t p, uint64_t p_dash) {
   uint128_t t1 = (uint128_t)a1 * b1;
   uint128_t t2 = (uint128_t)a2 * b2;
-  uint128_t t = (t1 >= t2) ? (t1 - t2) : (t1 + ((uint128_t)p << 64) - t2);
+  uint128_t t = t1 + ((uint128_t)p << 64) - t2;
   uint64_t m = (uint64_t)t * p_dash;
-  uint128_t u = (t + (uint128_t)m * p) >> 64;
-  return (u >= p) ? (u - p) : u;
+  uint64_t u = (t + (uint128_t)m * p) >> 64;
+  return (u >= p) ? u - p : u;
 }
