@@ -237,6 +237,7 @@ typedef struct {
   const prim_ctx_t *ctx;
   queue_t *q;
   size_t *vecs;
+  uint64_t *acc;
 } worker_t;
 
 static void *residue_for_prime(void *ud) {
@@ -245,6 +246,7 @@ static void *residue_for_prime(void *ud) {
   uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
   uint64_t exps[n], l_acc = 0;
   size_t *vecs = worker->vecs;
+  worker->acc = &l_acc;
 
   for (;;) {
     size_t n_vec = queue_pop(worker->q, vecs);

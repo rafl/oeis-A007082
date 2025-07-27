@@ -3,6 +3,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #define Q_CAP 64
 
@@ -59,8 +60,10 @@ size_t queue_pop(queue_t *q, size_t *out) {
   size_t m = q->m;
   pthread_mutex_lock(&q->mu);
 
-  while (q->fill == 0 && !q->done)
+  while (q->fill == 0 && !q->done) {
+    atomic_thread_fence(memory_order_seq_cst);
     pthread_cond_wait(&q->not_empty, &q->mu);
+  }
 
   if (q->fill == 0 && q->done) {
     pthread_mutex_unlock(&q->mu);
