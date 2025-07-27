@@ -234,56 +234,124 @@ static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
   while (k--) canon_iter_next(it, vec);
 }
 
-typedef struct {
-  _Atomic size_t *done, *next_idx;
-  prim_ctx_t *ctx;
-  size_t size;
-} worker_t;
+#define CHUNK (1UL<<17)
+#define Q_CAP 64
 
-#define CHUNK (1UL<<16)
+typedef struct {
+  size_t *buf;
+  size_t head, tail, cap, fill, m;
+  bool done;
+  pthread_mutex_t mu;
+  pthread_cond_t not_empty;
+  pthread_cond_t not_full;
+} queue_t;
+
+static void queue_init(queue_t *q, size_t m) {
+  q->head = q->tail = q->fill = 0;
+  q->cap = Q_CAP * CHUNK;
+  q->m = m;
+  q->done = false;
+  pthread_mutex_init(&q->mu, NULL);
+  pthread_cond_init(&q->not_empty, NULL);
+  pthread_cond_init(&q->not_full, NULL);
+  q->buf = malloc(q->cap * m * sizeof(size_t));
+  assert(q->buf);
+}
+
+static void queue_free(queue_t *q) {
+  free(q->buf);
+}
+
+static inline void queue_push(queue_t *restrict q, const size_t *vecs, size_t n_vec) {
+  size_t m = q->m;
+  pthread_mutex_lock(&q->mu);
+
+  while (q->fill + n_vec > q->cap)
+    pthread_cond_wait(&q->not_full, &q->mu);
+
+  size_t spc = q->cap - q->tail;
+  size_t fst = (n_vec <= spc) ? n_vec : spc;
+
+  memcpy(&q->buf[q->tail*m], vecs, fst*m*sizeof(size_t));
+
+  if (fst < n_vec)
+    memcpy(q->buf, &vecs[fst*m], (n_vec - fst)*m*sizeof(size_t));
+
+  q->tail = (q->tail + n_vec) % q->cap;
+  q->fill += n_vec;
+
+  pthread_cond_signal(&q->not_empty);
+  pthread_mutex_unlock(&q->mu);
+}
+
+static size_t queue_pop(queue_t *q, size_t *out) {
+  size_t m = q->m;
+  pthread_mutex_lock(&q->mu);
+
+  while (q->fill == 0 && !q->done)
+    pthread_cond_wait(&q->not_empty, &q->mu);
+
+  if (q->fill == 0 && q->done) {
+    pthread_mutex_unlock(&q->mu);
+    return 0;
+  }
+
+  size_t n_vec = q->fill < CHUNK ? q->fill : CHUNK;
+
+  size_t spc = q->cap - q->head;
+  size_t fst = n_vec <= spc ? n_vec : spc;
+
+  memcpy(out, &q->buf[q->head*m], fst*m*sizeof(size_t));
+  if (fst < n_vec)
+    memcpy(out + fst*m, q->buf, (n_vec - fst)*m*sizeof(size_t));
+
+  q->head = (q->head + n_vec) % q->cap;
+  q->fill -= n_vec;
+
+  pthread_cond_signal(&q->not_full);
+  pthread_mutex_unlock(&q->mu);
+
+  return n_vec;
+}
+
+typedef struct {
+  _Atomic size_t *done;
+  prim_ctx_t *ctx;
+  queue_t *q;
+} worker_t;
 
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
   prim_ctx_t *ctx = worker->ctx;
   uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
-  size_t siz = worker->size;
-    uint64_t exps[n], l_acc = 0;
-    size_t vec[m], scratch[m+1];
-    canon_iter_t can_it;
+  uint64_t exps[n], l_acc = 0;
+  size_t *vecs = malloc(CHUNK*m*sizeof(size_t));
+  assert(vecs);
 
-    canon_iter_new(&can_it, m, n, scratch);
-    size_t l_rank = 0;
+  for (;;) {
+    size_t n_vec = queue_pop(worker->q, vecs);
+    if (!n_vec) break;
 
-    for (;;) {
-      size_t start = atomic_fetch_add_explicit(worker->next_idx, CHUNK, memory_order_relaxed);
-      if (start >= siz) break;
-      size_t delta = start - l_rank;
-      canon_iter_skip(&can_it, delta, vec);
-
-      size_t remaining = siz - start;
-      size_t block = remaining < CHUNK ? remaining : CHUNK;
-      l_rank = start;
-
-      for (size_t c = 0; c < block; ++c) {
-        canon_iter_next(&can_it, vec);
-        create_exps(vec, m, exps);
-        uint64_t f_0 = f(vec, exps, ctx);
-        size_t vec_rots[2*m];
-        memcpy(vec_rots, vec, m*sizeof(uint64_t));
-        memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
-        for (size_t r = 0; r < m; ++r) {
-          size_t *vec_r = vec_rots + r;
-          if (vec_r[0] == 0) continue;
-          uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
-          size_t idx = (2*r) % m;
-          uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
-          l_acc = add_mod_u64(l_acc, f_n, p);
-        }
+    for (size_t c = 0; c < n_vec; ++c) {
+      size_t *vec = &vecs[c*m];
+      create_exps(vec, m, exps);
+      uint64_t f_0 = f(vec, exps, ctx);
+      size_t vec_rots[2*m];
+      memcpy(vec_rots, vec, m*sizeof(uint64_t));
+      memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
+      for (size_t r = 0; r < m; ++r) {
+        size_t *vec_r = vec_rots + r;
+        if (vec_r[0] == 0) continue;
+        uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
+        size_t idx = (2*r) % m;
+        uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
+        l_acc = add_mod_u64(l_acc, f_n, p);
       }
-      atomic_fetch_add_explicit(worker->done, block, memory_order_relaxed);
-      l_rank += block;
     }
+    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+  }
 
+  free(vecs);
   return (void *)l_acc;
 }
 
@@ -315,22 +383,49 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (!st->quiet)
     progress_start(&prog, p, &done, siz);
 
-  _Atomic size_t next_idx = 0;
-
   uint64_t acc = 0;
 
   size_t n_thrds = get_num_threads();
   pthread_t worker[n_thrds];
 
-  worker_t w_ctx = { .ctx = ctx, .done = &done, .next_idx = &next_idx, .size = siz };
+  canon_iter_t it;
+  size_t *vecs, scratch[m+1];
+  vecs = malloc(m*CHUNK*sizeof(size_t));
+  assert(vecs);
+  canon_iter_new(&it, m, n, scratch);
+
+  queue_t q;
+  queue_init(&q, m);
+
+  worker_t w_ctx = { .ctx = ctx, .done = &done, .q = &q };
   for (size_t i = 0; i < n_thrds; ++i)
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctx);
+
+  for (;;) {
+    size_t n_vec = 0;
+    for (; n_vec < CHUNK; ++n_vec) {
+      if (!canon_iter_next(&it, &vecs[n_vec*m]))
+        break;
+    }
+
+    queue_push(&q, vecs, n_vec);
+
+    if (n_vec < CHUNK) break;
+  }
+
+  pthread_mutex_lock(&q.mu);
+  q.done = true;
+  pthread_cond_broadcast(&q.not_empty);
+  pthread_mutex_unlock(&q.mu);
 
   for (size_t i = 0; i < n_thrds; ++i) {
     uint64_t ret;
     pthread_join(worker[i], (void *)&ret);
     acc = add_mod_u64(acc, ret, p);
   }
+
+  queue_free(&q);
+  free(vecs);
 
   if (!st->quiet)
     progress_stop(&prog);
