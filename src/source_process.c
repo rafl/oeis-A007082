@@ -240,7 +240,7 @@ typedef struct {
   size_t size;
 } worker_t;
 
-#define CHUNK 4096
+#define CHUNK (1UL<<16)
 
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
