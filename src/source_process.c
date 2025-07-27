@@ -227,14 +227,16 @@ static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
 
 typedef struct {
   uint64_t n, m, *ps;
-  size_t idx, np;
+  size_t idx, np, *vecss;
   bool quiet;
+  size_t n_thrds;
 } proc_state_t;
 
 typedef struct {
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
   queue_t *q;
+  size_t *vecs;
 } worker_t;
 
 static void *residue_for_prime(void *ud) {
@@ -242,8 +244,7 @@ static void *residue_for_prime(void *ud) {
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
   uint64_t exps[n], l_acc = 0;
-  size_t *vecs = malloc(CHUNK*m*sizeof(size_t));
-  assert(vecs);
+  size_t *vecs = worker->vecs;
 
   for (;;) {
     size_t n_vec = queue_pop(worker->q, vecs);
@@ -268,7 +269,6 @@ static void *residue_for_prime(void *ud) {
     atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
   }
 
-  free(vecs);
   return (void *)l_acc;
 }
 
@@ -302,18 +302,18 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   uint64_t acc = 0;
 
-  size_t n_thrds = get_num_threads();
-  pthread_t worker[n_thrds];
-
   queue_t *q = queue_new(n, m);
 
-  worker_t w_ctx = { .ctx = ctx, .done = &done, .q = q };
-  for (size_t i = 0; i < n_thrds; ++i)
-    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctx);
+  pthread_t worker[st->n_thrds];
+  worker_t w_ctxs[st->n_thrds];
+  for (size_t i = 0; i < st->n_thrds; ++i) {
+    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m] };
+    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
+  }
 
   queue_fill(q);
 
-  for (size_t i = 0; i < n_thrds; ++i) {
+  for (size_t i = 0; i < st->n_thrds; ++i) {
     uint64_t ret;
     pthread_join(worker[i], (void *)&ret);
     acc = add_mod_u64(acc, ret, p);
@@ -335,6 +335,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
 static void proc_destroy(source_t *self) {
   proc_state_t *st = self->state;
+  free(st->vecss);
   free(st->ps);
   free(st);
   free(self);
@@ -350,7 +351,10 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
 
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
-  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet };
+  size_t n_thrds = get_num_threads();
+  size_t *vecss = malloc(CHUNK*m*n_thrds*sizeof(size_t));
+  assert(vecss);
+  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .n_thrds = n_thrds, .vecss = vecss };
 
   source_t *src = malloc(sizeof *src);
   assert(src);
