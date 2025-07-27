@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <unistd.h>
 
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
@@ -233,23 +234,19 @@ static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
   while (k--) canon_iter_next(it, vec);
 }
 
-static uint64_t residue_for_prime(bool quiet, uint64_t n, uint64_t m, uint64_t p) {
-  uint64_t w = mth_root_mod_p(p, m);
-  prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+typedef struct {
+  _Atomic size_t *done, *next_idx;
+  prim_ctx_t *ctx;
+  size_t size;
+} worker_t;
 
-  const size_t siz = canon_iter_size(m, n);
+#define CHUNK 4096
 
-  _Atomic size_t done = 0;
-  progress_t prog;
-  if (!quiet)
-    progress_start(&prog, p, &done, siz);
-
-  _Atomic size_t next_idx = 0;
-  #define CHUNK 4096
-
-  uint64_t acc = 0;
-  #pragma omp parallel
-  {
+static void *residue_for_prime(void *ud) {
+  worker_t *worker = ud;
+  prim_ctx_t *ctx = worker->ctx;
+  uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
+  size_t siz = worker->size;
     uint64_t exps[n], l_acc = 0;
     size_t vec[m], scratch[m+1];
     canon_iter_t can_it;
@@ -258,13 +255,13 @@ static uint64_t residue_for_prime(bool quiet, uint64_t n, uint64_t m, uint64_t p
     size_t l_rank = 0;
 
     for (;;) {
-      size_t start = atomic_fetch_add_explicit(&next_idx, CHUNK, memory_order_relaxed);
+      size_t start = atomic_fetch_add_explicit(worker->next_idx, CHUNK, memory_order_relaxed);
       if (start >= siz) break;
       size_t delta = start - l_rank;
       canon_iter_skip(&can_it, delta, vec);
 
       size_t remaining = siz - start;
-      size_t block     = remaining < CHUNK ? remaining : CHUNK;
+      size_t block = remaining < CHUNK ? remaining : CHUNK;
       l_rank = start;
 
       for (size_t c = 0; c < block; ++c) {
@@ -283,28 +280,67 @@ static uint64_t residue_for_prime(bool quiet, uint64_t n, uint64_t m, uint64_t p
           l_acc = add_mod_u64(l_acc, f_n, p);
         }
       }
-      atomic_fetch_add_explicit(&done, block, memory_order_relaxed);
+      atomic_fetch_add_explicit(worker->done, block, memory_order_relaxed);
       l_rank += block;
     }
 
-    #pragma omp critical
-    acc = add_mod_u64(acc, l_acc, p);
-  }
-
-  if (!quiet)
-    progress_stop(&prog);
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
-  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
-  prim_ctx_free(ctx);
-  return ret;
+  return (void *)l_acc;
 }
 
-static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
+static size_t get_num_threads() {
+  char *env = getenv("OMP_NUM_THREADS");
+  if (env) {
+    char *endptr;
+    long val = strtol(env, &endptr, 10);
+    if (*endptr == '\0' && val > 0)
+      return (size_t)val;
+  }
+
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  return n > 0 ? (size_t)n : 1;
+}
+
+static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   proc_state_t *st = self->state;
   if (st->idx == st->np) return 0;
 
-  *p = st->ps[st->idx++];
-  *res = residue_for_prime(st->quiet, st->n, st->m, *p);
+  uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
+  uint64_t w = mth_root_mod_p(p, m);
+  prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+
+  const size_t siz = canon_iter_size(m, n);
+
+  _Atomic size_t done = 0;
+  progress_t prog;
+  if (!st->quiet)
+    progress_start(&prog, p, &done, siz);
+
+  _Atomic size_t next_idx = 0;
+
+  uint64_t acc = 0;
+
+  size_t n_thrds = get_num_threads();
+  pthread_t worker[n_thrds];
+
+  worker_t w_ctx = { .ctx = ctx, .done = &done, .next_idx = &next_idx, .size = siz };
+  for (size_t i = 0; i < n_thrds; ++i)
+    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctx);
+
+  for (size_t i = 0; i < n_thrds; ++i) {
+    uint64_t ret;
+    pthread_join(worker[i], (void *)&ret);
+    acc = add_mod_u64(acc, ret, p);
+  }
+
+  if (!st->quiet)
+    progress_stop(&prog);
+
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
+  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
+  prim_ctx_free(ctx);
+
+  *p_ret = st->ps[st->idx++];
+  *res = ret;
   return 1;
 }
 
