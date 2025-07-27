@@ -238,6 +238,7 @@ typedef struct {
   queue_t *q;
   size_t *vecs;
   uint64_t *acc;
+  bool idle;
 } worker_t;
 
 static void *residue_for_prime(void *ud) {
@@ -249,7 +250,7 @@ static void *residue_for_prime(void *ud) {
   worker->acc = &l_acc;
 
   for (;;) {
-    size_t n_vec = queue_pop(worker->q, vecs);
+    size_t n_vec = queue_pop(worker->q, vecs, &worker->idle);
     if (!n_vec) break;
 
     for (size_t c = 0; c < n_vec; ++c) {
@@ -309,7 +310,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
   for (size_t i = 0; i < st->n_thrds; ++i) {
-    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m] };
+    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false };
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 

@@ -21,4 +21,4 @@ typedef struct {
 queue_t *queue_new(size_t, size_t);
 void queue_free(queue_t *);
 void queue_fill(queue_t *);
-size_t queue_pop(queue_t *, size_t *);
+size_t queue_pop(queue_t *, size_t *, bool *);
