@@ -4,6 +4,7 @@
 #include "primes.h"
 #include "mss.h"
 #include "progress.h"
+#include "queue.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -105,7 +106,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
+static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
   size_t tot = 0;
@@ -119,7 +120,7 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
   return coeff;
 }
 
-static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
+static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
   uint64_t det = ctx->r, scaling_factor = ctx->r;
 
@@ -150,7 +151,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
-static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f_fst_term(uint64_t *exps, const prim_ctx_t *ctx) {
   uint64_t acc = ctx->r;
   for (size_t j = 0; j < ctx->n; ++j) {
     for (size_t k = j + 1; k < ctx->n; ++k) {
@@ -161,7 +162,7 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   return acc;
 }
 
-static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
+static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups
@@ -220,7 +221,7 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
@@ -230,99 +231,15 @@ typedef struct {
   bool quiet;
 } proc_state_t;
 
-static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
-  while (k--) canon_iter_next(it, vec);
-}
-
-#define CHUNK (1UL<<17)
-#define Q_CAP 64
-
-typedef struct {
-  size_t *buf;
-  size_t head, tail, cap, fill, m;
-  bool done;
-  pthread_mutex_t mu;
-  pthread_cond_t not_empty;
-  pthread_cond_t not_full;
-} queue_t;
-
-static void queue_init(queue_t *q, size_t m) {
-  q->head = q->tail = q->fill = 0;
-  q->cap = Q_CAP * CHUNK;
-  q->m = m;
-  q->done = false;
-  pthread_mutex_init(&q->mu, NULL);
-  pthread_cond_init(&q->not_empty, NULL);
-  pthread_cond_init(&q->not_full, NULL);
-  q->buf = malloc(q->cap * m * sizeof(size_t));
-  assert(q->buf);
-}
-
-static void queue_free(queue_t *q) {
-  free(q->buf);
-}
-
-static inline void queue_push(queue_t *restrict q, const size_t *vecs, size_t n_vec) {
-  size_t m = q->m;
-  pthread_mutex_lock(&q->mu);
-
-  while (q->fill + n_vec > q->cap)
-    pthread_cond_wait(&q->not_full, &q->mu);
-
-  size_t spc = q->cap - q->tail;
-  size_t fst = (n_vec <= spc) ? n_vec : spc;
-
-  memcpy(&q->buf[q->tail*m], vecs, fst*m*sizeof(size_t));
-
-  if (fst < n_vec)
-    memcpy(q->buf, &vecs[fst*m], (n_vec - fst)*m*sizeof(size_t));
-
-  q->tail = (q->tail + n_vec) % q->cap;
-  q->fill += n_vec;
-
-  pthread_cond_signal(&q->not_empty);
-  pthread_mutex_unlock(&q->mu);
-}
-
-static size_t queue_pop(queue_t *q, size_t *out) {
-  size_t m = q->m;
-  pthread_mutex_lock(&q->mu);
-
-  while (q->fill == 0 && !q->done)
-    pthread_cond_wait(&q->not_empty, &q->mu);
-
-  if (q->fill == 0 && q->done) {
-    pthread_mutex_unlock(&q->mu);
-    return 0;
-  }
-
-  size_t n_vec = q->fill < CHUNK ? q->fill : CHUNK;
-
-  size_t spc = q->cap - q->head;
-  size_t fst = n_vec <= spc ? n_vec : spc;
-
-  memcpy(out, &q->buf[q->head*m], fst*m*sizeof(size_t));
-  if (fst < n_vec)
-    memcpy(out + fst*m, q->buf, (n_vec - fst)*m*sizeof(size_t));
-
-  q->head = (q->head + n_vec) % q->cap;
-  q->fill -= n_vec;
-
-  pthread_cond_signal(&q->not_full);
-  pthread_mutex_unlock(&q->mu);
-
-  return n_vec;
-}
-
 typedef struct {
   _Atomic size_t *done;
-  prim_ctx_t *ctx;
+  const prim_ctx_t *ctx;
   queue_t *q;
 } worker_t;
 
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
-  prim_ctx_t *ctx = worker->ctx;
+  const prim_ctx_t *ctx = worker->ctx;
   uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
   uint64_t exps[n], l_acc = 0;
   size_t *vecs = malloc(CHUNK*m*sizeof(size_t));
@@ -388,35 +305,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   size_t n_thrds = get_num_threads();
   pthread_t worker[n_thrds];
 
-  canon_iter_t it;
-  size_t *vecs, scratch[m+1];
-  vecs = malloc(m*CHUNK*sizeof(size_t));
-  assert(vecs);
-  canon_iter_new(&it, m, n, scratch);
+  queue_t *q = queue_new(n, m);
 
-  queue_t q;
-  queue_init(&q, m);
-
-  worker_t w_ctx = { .ctx = ctx, .done = &done, .q = &q };
+  worker_t w_ctx = { .ctx = ctx, .done = &done, .q = q };
   for (size_t i = 0; i < n_thrds; ++i)
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctx);
 
-  for (;;) {
-    size_t n_vec = 0;
-    for (; n_vec < CHUNK; ++n_vec) {
-      if (!canon_iter_next(&it, &vecs[n_vec*m]))
-        break;
-    }
-
-    queue_push(&q, vecs, n_vec);
-
-    if (n_vec < CHUNK) break;
-  }
-
-  pthread_mutex_lock(&q.mu);
-  q.done = true;
-  pthread_cond_broadcast(&q.not_empty);
-  pthread_mutex_unlock(&q.mu);
+  queue_fill(q);
 
   for (size_t i = 0; i < n_thrds; ++i) {
     uint64_t ret;
@@ -424,8 +319,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     acc = add_mod_u64(acc, ret, p);
   }
 
-  queue_free(&q);
-  free(vecs);
+  queue_free(q);
 
   if (!st->quiet)
     progress_stop(&prog);
