@@ -12,14 +12,13 @@
 typedef struct {
   size_t *scratch, *buf, *vecs;
   size_t head, tail, cap, fill, m;
-  bool done;
+  bool done, pause;
   canon_iter_t it;
   pthread_mutex_t mu;
-  pthread_cond_t not_empty;
-  pthread_cond_t not_full;
+  pthread_cond_t not_empty, not_full, resume;
 } queue_t;
 
-queue_t *queue_new(size_t, size_t, size_t *);
+queue_t *queue_new(size_t, size_t, size_t, size_t *);
 void queue_free(queue_t *);
 void queue_fill(queue_t *);
 size_t queue_pop(queue_t *, size_t *, bool *);

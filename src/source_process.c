@@ -5,6 +5,7 @@
 #include "mss.h"
 #include "progress.h"
 #include "queue.h"
+#include "snapshot.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -305,16 +306,24 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   uint64_t acc = 0;
 
-  queue_t *q = queue_new(n, m, &st->vecss[st->n_thrds*CHUNK*m]);
+  queue_t *q = queue_new(n, m, done, &st->vecss[st->n_thrds*CHUNK*m]);
 
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
+  bool *idles[st->n_thrds];
+  uint64_t **accs[st->n_thrds];
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false };
+    idles[i] = &w_ctxs[i].idle;
+    accs[i] = &w_ctxs[i].acc;
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 
+  snapshot_t ss;
+  snapshot_start(&ss, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc, accs);
+
   queue_fill(q);
+  snapshot_stop(&ss);
 
   for (size_t i = 0; i < st->n_thrds; ++i) {
     uint64_t ret;
