@@ -355,7 +355,7 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
-  size_t *vecss = malloc(CHUNK*m*(n_thrds+1)*sizeof(size_t));
+  size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
   assert(vecss);
   *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .n_thrds = n_thrds, .vecss = vecss };
 

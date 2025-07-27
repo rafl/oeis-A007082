@@ -5,8 +5,6 @@
 #include <string.h>
 #include <stdatomic.h>
 
-#define Q_CAP 64
-
 queue_t *queue_new(size_t n, size_t m, size_t *vecs) {
   queue_t *q = malloc(sizeof(queue_t));
   assert(q);
@@ -20,15 +18,13 @@ queue_t *queue_new(size_t n, size_t m, size_t *vecs) {
   q->scratch = malloc((m+1)*sizeof(size_t));
   assert(q->scratch);
   canon_iter_new(&q->it, m, n, q->scratch);
-  q->buf = malloc(q->cap * m * sizeof(size_t));
-  assert(q->buf);
   q->vecs = vecs;
+  q->buf = &vecs[CHUNK*m];
 
   return q;
 }
 
 void queue_free(queue_t *q) {
-  free(q->buf);
   free(q->scratch);
 }
 

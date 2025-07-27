@@ -7,6 +7,7 @@
 #include <pthread.h>
 
 #define CHUNK (1UL<<17)
+#define Q_CAP 64
 
 typedef struct {
   size_t *scratch, *buf, *vecs;
