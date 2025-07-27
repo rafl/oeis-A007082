@@ -305,7 +305,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   uint64_t acc = 0;
 
-  queue_t *q = queue_new(n, m);
+  queue_t *q = queue_new(n, m, &st->vecss[st->n_thrds*CHUNK*m]);
 
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
@@ -355,7 +355,7 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
-  size_t *vecss = malloc(CHUNK*m*n_thrds*sizeof(size_t));
+  size_t *vecss = malloc(CHUNK*m*(n_thrds+1)*sizeof(size_t));
   assert(vecss);
   *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .n_thrds = n_thrds, .vecss = vecss };
 

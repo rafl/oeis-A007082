@@ -7,7 +7,7 @@
 
 #define Q_CAP 64
 
-queue_t *queue_new(size_t n, size_t m) {
+queue_t *queue_new(size_t n, size_t m, size_t *vecs) {
   queue_t *q = malloc(sizeof(queue_t));
   assert(q);
   q->head = q->tail = q->fill = 0;
@@ -22,14 +22,12 @@ queue_t *queue_new(size_t n, size_t m) {
   canon_iter_new(&q->it, m, n, q->scratch);
   q->buf = malloc(q->cap * m * sizeof(size_t));
   assert(q->buf);
-  q->vecs = malloc(m*CHUNK*sizeof(size_t));
-  assert(q->vecs);
+  q->vecs = vecs;
 
   return q;
 }
 
 void queue_free(queue_t *q) {
-  free(q->vecs);
   free(q->buf);
   free(q->scratch);
 }
