@@ -4,6 +4,9 @@
 #include <stdio.h>
 #include <inttypes.h>
 #include <unistd.h>
+#include <limits.h>
+#include <stdlib.h>
+#include <errno.h>
 
 #if __APPLE__
 #  define _CLOCK CLOCK_REALTIME
@@ -11,11 +14,20 @@
 #  define _CLOCK CLOCK_MONOTONIC
 #endif
 
-static void snapshot_save (snapshot_st_t *st, size_t idx) {
-  printf("\n\nSS: %"PRIu64" at %zu\n\n", *st->acc, idx);
+static void get_snapshot_path(uint64_t n, uint64_t p, char *buf, size_t len) {
+  snprintf(buf, len, ".%"PRIu64".%"PRIu64".ss", n, p);
 }
 
-static void *snapshot (void *ud) {
+static void snapshot_save(snapshot_st_t *st, size_t idx) {
+  char path[PATH_MAX];
+  get_snapshot_path(st->n, st->p, path, sizeof(path));
+  FILE *f = fopen(path, "w");
+  fwrite(&idx, sizeof(uint64_t), 1, f);
+  fwrite(st->acc, sizeof(uint64_t), 1, f);
+  fclose(f);
+}
+
+static void *snapshot(void *ud) {
   snapshot_st_t *st = ud;
   pthread_mutex_lock(&st->mu);
   while (!st->quit) {
@@ -53,9 +65,9 @@ static void *snapshot (void *ud) {
   return NULL;
 }
 
-void snapshot_start(snapshot_t *ss, uint64_t p, size_t n_thrds, pthread_mutex_t *queue_mu, pthread_cond_t *queue_resume, bool *pausep, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
+void snapshot_start(snapshot_t *ss, uint64_t n, uint64_t p, size_t n_thrds, pthread_mutex_t *queue_mu, pthread_cond_t *queue_resume, bool *pausep, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
   snapshot_st_t *st = &ss->st;
-  *st = (snapshot_st_t){ .p = p, .n_thrds = n_thrds, .queue_mu = queue_mu, .queue_resume = queue_resume, .pausep = pausep, .paused = paused, .idx = idx, .acc = acc };
+  *st = (snapshot_st_t){ .n = n, .p = p, .n_thrds = n_thrds, .queue_mu = queue_mu, .queue_resume = queue_resume, .pausep = pausep, .paused = paused, .idx = idx, .acc = acc };
   pthread_mutex_init(&st->mu, NULL);
   pthread_condattr_t ca;
   pthread_condattr_init(&ca);
@@ -75,6 +87,26 @@ void snapshot_stop(snapshot_t *restrict ss) {
   pthread_cond_signal(&st->cv);
   pthread_mutex_unlock(&st->mu);
   pthread_join(ss->ss, NULL);
+  snapshot_save(st, atomic_load_explicit(st->idx, memory_order_seq_cst));
   pthread_cond_destroy(&st->cv);
   pthread_mutex_destroy(&st->mu);
+}
+
+void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc) {
+  char path[PATH_MAX];
+  get_snapshot_path(n, p, path, sizeof(path));
+  FILE *f = fopen(path, "r");
+  if (!f) {
+    if (errno == ENOENT) return;
+    perror("fopen");
+    abort();
+  }
+
+  uint64_t ent[2];
+  size_t read = fread(ent, sizeof(uint64_t), 2, f);
+  if (read != 2) abort();
+  *done = ent[0];
+  *acc = ent[1];
+  fclose(f);
+  //printf("resuming %"PRIu64" from %"PRIu64" with %"PRIu64"\n", p, ent[0], ent[1]);
 }

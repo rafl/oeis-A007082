@@ -37,9 +37,8 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs, size_t n_
   size_t m = q->m;
   pthread_mutex_lock(&q->mu);
 
-  if (q->pause) {
+  if (q->pause)
     pthread_cond_wait(&q->resume, &q->mu);
-  }
 
   while (q->fill + n_vec > q->cap)
     pthread_cond_wait(&q->not_full, &q->mu);
