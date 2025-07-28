@@ -306,6 +306,15 @@ static size_t get_num_threads() {
   return n > 0 ? (size_t)n : 1;
 }
 
+static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, uint64_t *p_ret) {
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
+  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
+  prim_ctx_free(ctx);
+
+  *p_ret = st->ps[st->idx++];
+  *res = ret;
+  return 1;
+}
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   proc_state_t *st = self->state;
   if (st->idx == st->np) return 0;
@@ -322,47 +331,42 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (st->snapshot)
     snapshot_try_resume(n, p, &done, &acc);
   assert(done <= siz);
-  if (done != siz) {
-    progress_t prog;
-    if (!st->quiet)
-      progress_start(&prog, p, &done, siz);
 
-    queue_t *q = queue_new(n, m, done, &st->vecss[st->n_thrds*CHUNK*m]);
+  if (done == siz) return ret(st, ctx, acc, res, p_ret);
 
-    pthread_t worker[st->n_thrds];
-    worker_t w_ctxs[st->n_thrds];
-    bool *idles[st->n_thrds];
-    pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
-    for (size_t i = 0; i < st->n_thrds; ++i) {
-      w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
-      idles[i] = &w_ctxs[i].idle;
-      pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
-    }
+  progress_t prog;
+  if (!st->quiet)
+    progress_start(&prog, p, &done, siz);
 
-    snapshot_t ss;
-    if (st->snapshot)
-      snapshot_start(&ss, n, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc);
+  queue_t *q = queue_new(n, m, done, &st->vecss[st->n_thrds*CHUNK*m]);
 
-    queue_fill(q);
-
-    for (size_t i = 0; i < st->n_thrds; ++i)
-      pthread_join(worker[i], NULL);
-
-    queue_free(q);
-    if (st->snapshot)
-      snapshot_stop(&ss);
-
-    if (!st->quiet)
-      progress_stop(&prog);
+  pthread_t worker[st->n_thrds];
+  worker_t w_ctxs[st->n_thrds];
+  bool *idles[st->n_thrds];
+  pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
+  for (size_t i = 0; i < st->n_thrds; ++i) {
+    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
+    idles[i] = &w_ctxs[i].idle;
+    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
-  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
-  prim_ctx_free(ctx);
+  snapshot_t ss;
+  if (st->snapshot)
+    snapshot_start(&ss, n, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc);
 
-  *p_ret = st->ps[st->idx++];
-  *res = ret;
-  return 1;
+  queue_fill(q);
+
+  for (size_t i = 0; i < st->n_thrds; ++i)
+    pthread_join(worker[i], NULL);
+
+  queue_free(q);
+  if (st->snapshot)
+    snapshot_stop(&ss);
+
+  if (!st->quiet)
+    progress_stop(&prog);
+
+  return ret(st, ctx, acc, res, p_ret);
 }
 
 static void proc_destroy(source_t *self) {
