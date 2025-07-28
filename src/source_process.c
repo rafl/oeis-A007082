@@ -229,7 +229,7 @@ static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
 typedef struct {
   uint64_t n, m, *ps;
   size_t idx, np, *vecss;
-  bool quiet;
+  bool quiet, snapshot;
   size_t n_thrds;
 } proc_state_t;
 
@@ -319,7 +319,8 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   _Atomic size_t done = 0;
   uint64_t acc = 0;
 
-  snapshot_try_resume(n, p, &done, &acc);
+  if (st->snapshot)
+    snapshot_try_resume(n, p, &done, &acc);
   assert(done <= siz);
   if (done != siz) {
     progress_t prog;
@@ -339,7 +340,8 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     }
 
     snapshot_t ss;
-    snapshot_start(&ss, n, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc);
+    if (st->snapshot)
+      snapshot_start(&ss, n, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc);
 
     queue_fill(q);
 
@@ -347,7 +349,8 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
       pthread_join(worker[i], NULL);
 
     queue_free(q);
-    snapshot_stop(&ss);
+    if (st->snapshot)
+      snapshot_stop(&ss);
 
     if (!st->quiet)
       progress_stop(&prog);
@@ -372,7 +375,7 @@ static void proc_destroy(source_t *self) {
 
 #define P_STRIDE (1ULL << 10)
 
-source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
+source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   uint64_t m = m_for(n);
   size_t np;
   assert(m_id < P_STRIDE);
@@ -383,7 +386,7 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
   size_t n_thrds = get_num_threads();
   size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
   assert(vecss);
-  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .n_thrds = n_thrds, .vecss = vecss };
+  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
 
   source_t *src = malloc(sizeof *src);
   assert(src);
