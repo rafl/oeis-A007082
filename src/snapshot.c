@@ -7,6 +7,7 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #if __APPLE__
 #  define _CLOCK CLOCK_REALTIME
@@ -19,12 +20,26 @@ static void get_snapshot_path(uint64_t n, uint64_t p, char *buf, size_t len) {
 }
 
 static void snapshot_save(snapshot_st_t *st, size_t idx) {
-  char path[PATH_MAX];
+  char path[PATH_MAX], tmp[PATH_MAX];
   get_snapshot_path(st->n, st->p, path, sizeof(path));
-  FILE *f = fopen(path, "w");
-  fwrite(&idx, sizeof(uint64_t), 1, f);
-  fwrite(st->acc, sizeof(uint64_t), 1, f);
-  fclose(f);
+  snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+
+  int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+  if (fd < 0) {
+    printf("\nfailed to snapshot (open) %zu %"PRIu64"\n", idx, *st->acc);
+    return;
+  };
+
+  uint64_t data[2] = { idx, *st->acc };
+  if (write(fd, &data, sizeof(data)) != 2) {
+    printf("\nfailed to snapshot (write) %zu %"PRIu64"\n", idx, *st->acc);
+    close(fd);
+    unlink(tmp);
+    return;
+  }
+  fsync(fd);
+  close(fd);
+  rename(tmp, path);
 }
 
 static void *snapshot(void *ud) {
