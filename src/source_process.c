@@ -238,9 +238,20 @@ typedef struct {
   const prim_ctx_t *ctx;
   queue_t *q;
   size_t *vecs;
-  uint64_t *acc;
+  uint64_t *l_acc;
   bool idle;
 } worker_t;
+
+static void w_resume(void *ud) {
+  worker_t *w = ud;
+  w->idle = false;
+}
+
+static resume_cb_t w_idle(void *ud) {
+  worker_t *w = ud;
+  w->idle = true;
+  return w_resume;
+}
 
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
@@ -248,10 +259,10 @@ static void *residue_for_prime(void *ud) {
   uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
   uint64_t exps[n], l_acc = 0;
   size_t *vecs = worker->vecs;
-  worker->acc = &l_acc;
+  worker->l_acc = &l_acc;
 
   for (;;) {
-    size_t n_vec = queue_pop(worker->q, vecs, &worker->idle);
+    size_t n_vec = queue_pop(worker->q, vecs, w_idle, worker);
     if (!n_vec) break;
 
     for (size_t c = 0; c < n_vec; ++c) {
@@ -315,7 +326,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false };
     idles[i] = &w_ctxs[i].idle;
-    accs[i] = &w_ctxs[i].acc;
+    accs[i] = &w_ctxs[i].l_acc;
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 

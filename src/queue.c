@@ -59,14 +59,14 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs, size_t n_
   pthread_mutex_unlock(&q->mu);
 }
 
-size_t queue_pop(queue_t *q, size_t *out, bool *idlep) {
+size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
   size_t m = q->m;
   pthread_mutex_lock(&q->mu);
 
   while (q->fill == 0 && !q->done) {
-    atomic_thread_fence(memory_order_seq_cst);
-    *idlep = true;
+    resume_cb_t resume = onidle(ud);
     pthread_cond_wait(&q->not_empty, &q->mu);
+    resume(ud);
   }
 
   if (q->fill == 0 && q->done) {
@@ -74,7 +74,6 @@ size_t queue_pop(queue_t *q, size_t *out, bool *idlep) {
     return 0;
   }
 
-  *idlep = false;
   size_t n_vec = q->fill < CHUNK ? q->fill : CHUNK;
 
   size_t spc = q->cap - q->head;

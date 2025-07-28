@@ -18,7 +18,10 @@ typedef struct {
   pthread_cond_t not_empty, not_full, resume;
 } queue_t;
 
+typedef void (*resume_cb_t)(void *);
+typedef resume_cb_t (*idle_cb_t)(void *);
+
 queue_t *queue_new(size_t, size_t, size_t, size_t *);
 void queue_free(queue_t *);
 void queue_fill(queue_t *);
-size_t queue_pop(queue_t *, size_t *, bool *);
+size_t queue_pop(queue_t *, size_t *, idle_cb_t, void *);
