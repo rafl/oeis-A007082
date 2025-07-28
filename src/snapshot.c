@@ -42,11 +42,6 @@ static void *snapshot (void *ud) {
       if (!all_paused) usleep(1000);
     } while (!all_paused);
 
-    for (size_t i = 0; i < st->n_thrds; ++i) {
-      uint64_t *t_acc = *st->accs[i];
-      *st->acc = add_mod_u64(*st->acc, *t_acc, st->p);
-      *t_acc = 0;
-    }
     snapshot_save(st, atomic_load_explicit(st->idx, memory_order_seq_cst));
 
     pthread_mutex_lock(st->queue_mu);
@@ -58,9 +53,9 @@ static void *snapshot (void *ud) {
   return NULL;
 }
 
-void snapshot_start(snapshot_t *ss, uint64_t p, size_t n_thrds, pthread_mutex_t *queue_mu, pthread_cond_t *queue_resume, bool *pausep, bool **paused, _Atomic size_t *idx, uint64_t *acc, uint64_t ***accs) {
+void snapshot_start(snapshot_t *ss, uint64_t p, size_t n_thrds, pthread_mutex_t *queue_mu, pthread_cond_t *queue_resume, bool *pausep, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
   snapshot_st_t *st = &ss->st;
-  *st = (snapshot_st_t){ .p = p, .n_thrds = n_thrds, .queue_mu = queue_mu, .queue_resume = queue_resume, .pausep = pausep, .paused = paused, .idx = idx, .acc = acc, .accs = accs };
+  *st = (snapshot_st_t){ .p = p, .n_thrds = n_thrds, .queue_mu = queue_mu, .queue_resume = queue_resume, .pausep = pausep, .paused = paused, .idx = idx, .acc = acc };
   pthread_mutex_init(&st->mu, NULL);
   pthread_condattr_t ca;
   pthread_condattr_init(&ca);

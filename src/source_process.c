@@ -238,9 +238,18 @@ typedef struct {
   const prim_ctx_t *ctx;
   queue_t *q;
   size_t *vecs;
-  uint64_t *l_acc;
+  uint64_t *l_acc, *acc;
+  pthread_mutex_t *acc_mu;
   bool idle;
 } worker_t;
+
+static void w_upd_acc(void *ud) {
+  worker_t *w = ud;
+  pthread_mutex_lock(w->acc_mu);
+  *w->acc = add_mod_u64(*w->acc, *w->l_acc, w->ctx->p);
+  *w->l_acc = 0;
+  pthread_mutex_unlock(w->acc_mu);
+}
 
 static void w_resume(void *ud) {
   worker_t *w = ud;
@@ -249,6 +258,7 @@ static void w_resume(void *ud) {
 
 static resume_cb_t w_idle(void *ud) {
   worker_t *w = ud;
+  w_upd_acc(w);
   w->idle = true;
   return w_resume;
 }
@@ -284,7 +294,8 @@ static void *residue_for_prime(void *ud) {
     atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
   }
 
-  return (void *)l_acc;
+  w_upd_acc(worker);
+  return NULL;
 }
 
 static size_t get_num_threads() {
@@ -322,25 +333,21 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
   bool *idles[st->n_thrds];
-  uint64_t **accs[st->n_thrds];
+  pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
   for (size_t i = 0; i < st->n_thrds; ++i) {
-    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false };
+    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
     idles[i] = &w_ctxs[i].idle;
-    accs[i] = &w_ctxs[i].l_acc;
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 
   snapshot_t ss;
-  snapshot_start(&ss, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc, accs);
+  snapshot_start(&ss, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc);
 
   queue_fill(q);
   snapshot_stop(&ss);
 
-  for (size_t i = 0; i < st->n_thrds; ++i) {
-    uint64_t ret;
-    pthread_join(worker[i], (void *)&ret);
-    acc = add_mod_u64(acc, ret, p);
-  }
+  for (size_t i = 0; i < st->n_thrds; ++i)
+    pthread_join(worker[i], NULL);
 
   queue_free(q);
 
