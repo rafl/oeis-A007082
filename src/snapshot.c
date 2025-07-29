@@ -31,7 +31,7 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
   };
 
   uint64_t data[2] = { idx, *st->acc };
-  if (write(fd, &data, sizeof(data)) != 2) {
+  if (write(fd, &data, sizeof(data)) != 2*sizeof(uint64_t)) {
     printf("\nfailed to snapshot (write) %zu %"PRIu64"\n", idx, *st->acc);
     close(fd);
     unlink(tmp);
