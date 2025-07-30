@@ -5,8 +5,6 @@
 #include <string.h>
 #include <stdatomic.h>
 
-#include <stdio.h>
-
 queue_t *queue_new(size_t n, size_t m, const void *iter_st, size_t st_len, size_t *vecs) {
   queue_t *q = malloc(sizeof(queue_t));
   assert(q);

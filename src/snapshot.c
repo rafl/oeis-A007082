@@ -135,5 +135,4 @@ void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t 
   read = fread(iter_st, 1, ent[2], f);
   if (read != ent[2]) abort();
   fclose(f);
-  //printf("resuming %"PRIu64" from %"PRIu64" with %"PRIu64"\n", p, ent[0], ent[1]);
 }
