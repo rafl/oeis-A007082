@@ -56,7 +56,7 @@ static void *snapshot(void *ud) {
   while (!st->quit) {
     struct timespec now;
     clock_gettime(_CLOCK, &now);
-    now.tv_sec += 5;
+    now.tv_sec += 60*30;
     pthread_cond_timedwait(&st->cv, &st->mu, &now);
     if (st->quit) break;
 
