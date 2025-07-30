@@ -4,10 +4,13 @@
 #include "primes.h"
 #include "mss.h"
 #include "progress.h"
+#include "queue.h"
+#include "snapshot.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include <unistd.h>
 
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
@@ -104,7 +107,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len) {
+static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
   size_t tot = 0;
@@ -118,7 +121,7 @@ static uint64_t multinomial_mod_p(prim_ctx_t *ctx, const size_t *ms, size_t len)
   return coeff;
 }
 
-static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
+static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
   uint64_t det = ctx->r, scaling_factor = ctx->r;
 
@@ -149,7 +152,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
-static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f_fst_term(uint64_t *exps, const prim_ctx_t *ctx) {
   uint64_t acc = ctx->r;
   for (size_t j = 0; j < ctx->n; ++j) {
     for (size_t k = j + 1; k < ctx->n; ++k) {
@@ -160,7 +163,7 @@ static uint64_t f_fst_term(uint64_t *exps, prim_ctx_t *ctx) {
   return acc;
 }
 
-static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
+static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups
@@ -219,97 +222,159 @@ static uint64_t f_snd_trm(uint64_t *c, prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-static uint64_t f(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 typedef struct {
   uint64_t n, m, *ps;
-  size_t idx, np;
-  bool quiet;
+  size_t idx, np, *vecss;
+  bool quiet, snapshot;
+  size_t n_thrds;
 } proc_state_t;
 
-static inline void canon_iter_skip(canon_iter_t *it, size_t k, size_t *vec) {
-  while (k--) canon_iter_next(it, vec);
+typedef struct {
+  _Atomic size_t *done;
+  const prim_ctx_t *ctx;
+  queue_t *q;
+  size_t *vecs;
+  uint64_t *l_acc, *acc;
+  pthread_mutex_t *acc_mu;
+  bool idle;
+} worker_t;
+
+static void w_resume(void *ud) {
+  worker_t *w = ud;
+  w->idle = false;
 }
 
-static uint64_t residue_for_prime(bool quiet, uint64_t n, uint64_t m, uint64_t p) {
+static resume_cb_t w_idle(void *ud) {
+  worker_t *w = ud;
+  pthread_mutex_lock(w->acc_mu);
+  *w->acc = add_mod_u64(*w->acc, *w->l_acc, w->ctx->p);
+  *w->l_acc = 0;
+  pthread_mutex_unlock(w->acc_mu);
+  w->idle = true;
+  return w_resume;
+}
+
+static void *residue_for_prime(void *ud) {
+  worker_t *worker = ud;
+  const prim_ctx_t *ctx = worker->ctx;
+  uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
+  uint64_t exps[n], l_acc = 0;
+  size_t *vecs = worker->vecs;
+  worker->l_acc = &l_acc;
+
+  for (;;) {
+    size_t n_vec = queue_pop(worker->q, vecs, w_idle, worker);
+    if (!n_vec) break;
+
+    for (size_t c = 0; c < n_vec; ++c) {
+      size_t *vec = &vecs[c*m];
+      create_exps(vec, m, exps);
+      uint64_t f_0 = f(vec, exps, ctx);
+      size_t vec_rots[2*m];
+      memcpy(vec_rots, vec, m*sizeof(uint64_t));
+      memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
+      for (size_t r = 0; r < m; ++r) {
+        size_t *vec_r = vec_rots + r;
+        if (vec_r[0] == 0) continue;
+        uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
+        size_t idx = (2*r) % m;
+        uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
+        l_acc = add_mod_u64(l_acc, f_n, p);
+      }
+    }
+    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+  }
+
+  (void)w_idle(worker);
+  return NULL;
+}
+
+static size_t get_num_threads() {
+  char *env = getenv("OMP_NUM_THREADS");
+  if (env) {
+    char *endptr;
+    long val = strtol(env, &endptr, 10);
+    if (*endptr == '\0' && val > 0)
+      return (size_t)val;
+  }
+
+  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  return n > 0 ? (size_t)n : 1;
+}
+
+static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, uint64_t *p_ret) {
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
+  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
+  prim_ctx_free(ctx);
+
+  *p_ret = st->ps[st->idx++];
+  *res = ret;
+  return 1;
+}
+static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
+  proc_state_t *st = self->state;
+  if (st->idx == st->np) return 0;
+
+  uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
   const size_t siz = canon_iter_size(m, n);
 
   _Atomic size_t done = 0;
+  uint64_t acc = 0;
+
+  uint64_t iter_st[m+5];
+  size_t st_len = 0;
+
+  if (st->snapshot)
+    snapshot_try_resume(n, p, &done, &acc, iter_st, &st_len);
+  assert(done <= siz);
+
+  if (done == siz) return ret(st, ctx, acc, res, p_ret);
+
   progress_t prog;
-  if (!quiet)
+  if (!st->quiet)
     progress_start(&prog, p, &done, siz);
 
-  _Atomic size_t next_idx = 0;
-  #define CHUNK 4096
+  queue_t *q = queue_new(n, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
 
-  uint64_t acc = 0;
-  #pragma omp parallel
-  {
-    uint64_t exps[n], l_acc = 0;
-    size_t vec[m], scratch[m+1];
-    canon_iter_t can_it;
-
-    canon_iter_new(&can_it, m, n, scratch);
-    size_t l_rank = 0;
-
-    for (;;) {
-      size_t start = atomic_fetch_add_explicit(&next_idx, CHUNK, memory_order_relaxed);
-      if (start >= siz) break;
-      size_t delta = start - l_rank;
-      canon_iter_skip(&can_it, delta, vec);
-
-      size_t remaining = siz - start;
-      size_t block     = remaining < CHUNK ? remaining : CHUNK;
-      l_rank = start;
-
-      for (size_t c = 0; c < block; ++c) {
-        canon_iter_next(&can_it, vec);
-        create_exps(vec, m, exps);
-        uint64_t f_0 = f(vec, exps, ctx);
-        size_t vec_rots[2*m];
-        memcpy(vec_rots, vec, m*sizeof(uint64_t));
-        memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
-        for (size_t r = 0; r < m; ++r) {
-          size_t *vec_r = vec_rots + r;
-          if (vec_r[0] == 0) continue;
-          uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
-          size_t idx = (2*r) % m;
-          uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
-          l_acc = add_mod_u64(l_acc, f_n, p);
-        }
-      }
-      atomic_fetch_add_explicit(&done, block, memory_order_relaxed);
-      l_rank += block;
-    }
-
-    #pragma omp critical
-    acc = add_mod_u64(acc, l_acc, p);
+  pthread_t worker[st->n_thrds];
+  worker_t w_ctxs[st->n_thrds];
+  bool *idles[st->n_thrds];
+  pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
+  for (size_t i = 0; i < st->n_thrds; ++i) {
+    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
+    idles[i] = &w_ctxs[i].idle;
+    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 
-  if (!quiet)
+  snapshot_t ss;
+  if (st->snapshot)
+    snapshot_start(&ss, n, p, st->n_thrds, q, idles, &done, &acc);
+
+  queue_fill(q);
+
+  for (size_t i = 0; i < st->n_thrds; ++i)
+    pthread_join(worker[i], NULL);
+
+  queue_free(q);
+  if (st->snapshot)
+    snapshot_stop(&ss);
+
+  if (!st->quiet)
     progress_stop(&prog);
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[m], n-1, ctx->r, p, ctx->p_dash), ctx->r, p, ctx->p_dash);
-  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
-  prim_ctx_free(ctx);
-  return ret;
-}
 
-static int proc_next(source_t *self, uint64_t *res, uint64_t *p) {
-  proc_state_t *st = self->state;
-  if (st->idx == st->np) return 0;
-
-  *p = st->ps[st->idx++];
-  *res = residue_for_prime(st->quiet, st->n, st->m, *p);
-  return 1;
+  return ret(st, ctx, acc, res, p_ret);
 }
 
 static void proc_destroy(source_t *self) {
   proc_state_t *st = self->state;
+  free(st->vecss);
   free(st->ps);
   free(st);
   free(self);
@@ -317,7 +382,7 @@ static void proc_destroy(source_t *self) {
 
 #define P_STRIDE (1ULL << 10)
 
-source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
+source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   uint64_t m = m_for(n);
   size_t np;
   assert(m_id < P_STRIDE);
@@ -325,7 +390,10 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet) {
 
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
-  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet };
+  size_t n_thrds = get_num_threads();
+  size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
+  assert(vecss);
+  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
 
   source_t *src = malloc(sizeof *src);
   assert(src);

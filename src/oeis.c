@@ -31,10 +31,10 @@ static uint64_t parse_uint(const char *s) {
 int main (int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
-  bool quiet = false;
+  bool quiet = false, snapshot = false;
 
   for (;;) {
-    int c = getopt(argc, argv, "m:pcq");
+    int c = getopt(argc, argv, "m:pcqs");
     if (c == -1) break;
 
     switch (c) {
@@ -42,6 +42,7 @@ int main (int argc, char **argv) {
       case 'p': mode |= MODE_PROCESS; break;
       case 'c': mode |= MODE_COMBINE; break;
       case 'q': quiet = true; break;
+      case 's': snapshot = true; break;
     }
   }
   assert(mode < MODE_LAST);
@@ -50,7 +51,7 @@ int main (int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id, quiet) : source_stdin_new();
+  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id, quiet, snapshot) : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
   bool converged = false;

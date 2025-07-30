@@ -1,5 +1,6 @@
 #include "maths.h"
 #include "mss.h"
+#include "debug.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -8,12 +9,35 @@ void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch) {
   it->m = m;
   it->tot = tot;
   it->scratch = scratch;
-  memset(it->scratch, 0, sizeof(size_t) * (m + 1));
+  memset(it->scratch, 0, (m+1)*sizeof(size_t));
 
   it->t = 1; // position
   it->p = 1; // period length
   it->sum = 0;
   it->stage = ITER_STAGE_DESCEND;
+}
+
+// t p sum stage scratch...(m+1)
+size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len) {
+  size_t n = (4+it->m+1)*sizeof(uint64_t);
+  assert(len >= n);
+  uint64_t *out = buf;
+  memcpy(out, (uint64_t[]){ it->t, it->p, it->sum, it->stage }, 4*sizeof(uint64_t));
+  memcpy(out+4, it->scratch, (it->m+1)*sizeof(uint64_t));
+  return n;
+}
+
+void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch, const void *buf, size_t len) {
+  assert(len >= (4+m+1)*sizeof(uint64_t));
+  const uint64_t *in = buf;
+  it->m = m;
+  it->tot = tot;
+  it->t = in[0];
+  it->p = in[1];
+  it->sum = in[2];
+  it->stage = in[3];
+  it->scratch = scratch;
+  memcpy(it->scratch, in+4, (m+1)*sizeof(uint64_t));
 }
 
 bool canon_iter_next(canon_iter_t *it, size_t *vec) {

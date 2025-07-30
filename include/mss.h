@@ -16,4 +16,8 @@ typedef struct {
 
 void canon_iter_new(canon_iter_t *, size_t, size_t, size_t *);
 bool canon_iter_next(canon_iter_t *, size_t *);
+
 size_t canon_iter_size(size_t, size_t);
+
+size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len);
+void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch, const void *buf, size_t len);
