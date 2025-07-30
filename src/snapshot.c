@@ -30,9 +30,17 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
     return;
   };
 
-  uint64_t data[2] = { idx, *st->acc };
-  if (write(fd, &data, sizeof(data)) != 2*sizeof(uint64_t)) {
+  uint64_t iter_st[4+st->q->m+1];
+  size_t st_len = queue_save(st->q, iter_st, (4+st->q->m+1)*sizeof(uint64_t));
+  uint64_t data[3] = { idx, *st->acc, st_len };
+  if (write(fd, &data, sizeof(data)) != 3*sizeof(uint64_t)) {
     printf("\nfailed to snapshot (write) %zu %"PRIu64"\n", idx, *st->acc);
+    close(fd);
+    unlink(tmp);
+    return;
+  }
+  if (write(fd, iter_st, st_len) != (int)st_len) {
+    printf("\nfailed to snapshot (write iter) %zu %"PRIu64"\n", idx, *st->acc);
     close(fd);
     unlink(tmp);
     return;
@@ -48,13 +56,13 @@ static void *snapshot(void *ud) {
   while (!st->quit) {
     struct timespec now;
     clock_gettime(_CLOCK, &now);
-    now.tv_sec += 60;
+    now.tv_sec += 5;
     pthread_cond_timedwait(&st->cv, &st->mu, &now);
     if (st->quit) break;
 
-    pthread_mutex_lock(st->queue_mu);
-    *st->pausep = true;
-    pthread_mutex_unlock(st->queue_mu);
+    pthread_mutex_lock(&st->q->mu);
+    st->q->pause = true;
+    pthread_mutex_unlock(&st->q->mu);
 
     bool all_paused;
     do {
@@ -71,18 +79,18 @@ static void *snapshot(void *ud) {
 
     snapshot_save(st, atomic_load_explicit(st->idx, memory_order_seq_cst));
 
-    pthread_mutex_lock(st->queue_mu);
-    *st->pausep = false;
-    pthread_mutex_unlock(st->queue_mu);
-    pthread_cond_signal(st->queue_resume);
+    pthread_mutex_lock(&st->q->mu);
+    st->q->pause = false;
+    pthread_mutex_unlock(&st->q->mu);
+    pthread_cond_signal(&st->q->resume);
   }
   pthread_mutex_unlock(&st->mu);
   return NULL;
 }
 
-void snapshot_start(snapshot_t *ss, uint64_t n, uint64_t p, size_t n_thrds, pthread_mutex_t *queue_mu, pthread_cond_t *queue_resume, bool *pausep, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
+void snapshot_start(snapshot_t *ss, uint64_t n, uint64_t p, size_t n_thrds, queue_t *q, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
   snapshot_st_t *st = &ss->st;
-  *st = (snapshot_st_t){ .n = n, .p = p, .n_thrds = n_thrds, .queue_mu = queue_mu, .queue_resume = queue_resume, .pausep = pausep, .paused = paused, .idx = idx, .acc = acc };
+  *st = (snapshot_st_t){ .n = n, .p = p, .n_thrds = n_thrds, .q = q, .paused = paused, .idx = idx, .acc = acc };
   pthread_mutex_init(&st->mu, NULL);
   pthread_condattr_t ca;
   pthread_condattr_init(&ca);
@@ -107,9 +115,10 @@ void snapshot_stop(snapshot_t *restrict ss) {
   pthread_mutex_destroy(&st->mu);
 }
 
-void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc) {
+void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc, void *iter_st, size_t *st_len) {
   char path[PATH_MAX];
   get_snapshot_path(n, p, path, sizeof(path));
+  *st_len = 0;
   FILE *f = fopen(path, "r");
   if (!f) {
     if (errno == ENOENT) return;
@@ -117,11 +126,14 @@ void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t 
     abort();
   }
 
-  uint64_t ent[2];
-  size_t read = fread(ent, sizeof(uint64_t), 2, f);
-  if (read != 2) abort();
+  uint64_t ent[3];
+  size_t read = fread(ent, sizeof(uint64_t), 3, f);
+  if (read != 3) abort();
   *done = ent[0];
   *acc = ent[1];
+  *st_len = ent[2];
+  read = fread(iter_st, 1, ent[2], f);
+  if (read != ent[2]) abort();
   fclose(f);
   //printf("resuming %"PRIu64" from %"PRIu64" with %"PRIu64"\n", p, ent[0], ent[1]);
 }

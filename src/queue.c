@@ -7,7 +7,7 @@
 
 #include <stdio.h>
 
-queue_t *queue_new(size_t n, size_t m, size_t from, size_t *vecs) {
+queue_t *queue_new(size_t n, size_t m, const void *iter_st, size_t st_len, size_t *vecs) {
   queue_t *q = malloc(sizeof(queue_t));
   assert(q);
   q->head = q->tail = q->fill = 0;
@@ -20,13 +20,18 @@ queue_t *queue_new(size_t n, size_t m, size_t from, size_t *vecs) {
   pthread_cond_init(&q->resume, NULL);
   q->scratch = malloc((m+1)*sizeof(size_t));
   assert(q->scratch);
-  canon_iter_new(&q->it, m, n, q->scratch);
+  if (st_len)
+    canon_iter_resume(&q->it, m, n, q->scratch, iter_st, st_len);
+  else
+    canon_iter_new(&q->it, m, n, q->scratch);
   q->vecs = vecs;
   q->buf = &vecs[CHUNK*m];
 
-  while (from--) canon_iter_next(&q->it, q->vecs);
-
   return q;
+}
+
+size_t queue_save(queue_t *q, void *buf, size_t len) {
+  return canon_iter_save(&q->it, buf, len);
 }
 
 void queue_free(queue_t *q) {
@@ -36,9 +41,6 @@ void queue_free(queue_t *q) {
 static inline void queue_push(queue_t *restrict q, const size_t *vecs, size_t n_vec) {
   size_t m = q->m;
   pthread_mutex_lock(&q->mu);
-
-  if (q->pause)
-    pthread_cond_wait(&q->resume, &q->mu);
 
   while (q->fill + n_vec > q->cap)
     pthread_cond_wait(&q->not_full, &q->mu);
@@ -55,6 +57,10 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs, size_t n_
   q->fill += n_vec;
 
   pthread_cond_signal(&q->not_empty);
+
+  if (q->pause)
+    pthread_cond_wait(&q->resume, &q->mu);
+
   pthread_mutex_unlock(&q->mu);
 }
 

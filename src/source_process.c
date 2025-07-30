@@ -328,8 +328,11 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   _Atomic size_t done = 0;
   uint64_t acc = 0;
 
+  uint64_t iter_st[m+5];
+  size_t st_len;
+
   if (st->snapshot)
-    snapshot_try_resume(n, p, &done, &acc);
+    snapshot_try_resume(n, p, &done, &acc, iter_st, &st_len);
   assert(done <= siz);
 
   if (done == siz) return ret(st, ctx, acc, res, p_ret);
@@ -338,7 +341,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (!st->quiet)
     progress_start(&prog, p, &done, siz);
 
-  queue_t *q = queue_new(n, m, done, &st->vecss[st->n_thrds*CHUNK*m]);
+  queue_t *q = queue_new(n, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
 
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
@@ -352,7 +355,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   snapshot_t ss;
   if (st->snapshot)
-    snapshot_start(&ss, n, p, st->n_thrds, &q->mu, &q->resume, &q->pause, idles, &done, &acc);
+    snapshot_start(&ss, n, p, st->n_thrds, q, idles, &done, &acc);
 
   queue_fill(q);
 
