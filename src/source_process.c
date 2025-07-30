@@ -329,7 +329,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   uint64_t acc = 0;
 
   uint64_t iter_st[m+5];
-  size_t st_len;
+  size_t st_len = 0;
 
   if (st->snapshot)
     snapshot_try_resume(n, p, &done, &acc, iter_st, &st_len);
