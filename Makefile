@@ -24,30 +24,35 @@ SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
 
-TARGET := oeis
+MAIN_FILES := oeis.c
+MAIN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(MAIN_FILES))
+
+UTIL_OBJS := $(filter-out $(MAIN_OBJS),$(OBJS))
+
+TARGETS := $(patsubst %.c,%,$(MAIN_FILES))
 
 .PHONY: all gen use optimised clean pgo-clean test
 
-all: $(if $(filter use,$(PGO)),$(PROFDATA)) $(TARGET)
+all: $(if $(filter use,$(PGO)),$(PROFDATA)) $(TARGETS)
 
 $(PROFDATA):
 	[ "$(IS_CLANG)" != "1" ] || llvm-profdata merge -output=$@ $(PGO_DIR)/default_*.profraw
 
 gen:
 	$(MAKE) clean
-	$(MAKE) PGO=gen all
+	$(MAKE) PGO=gen oeis
 
 use:
 	$(MAKE) clean
-	$(MAKE) PGO=use all
+	$(MAKE) PGO=use oeis
 
 optimised:
 	$(MAKE) gen
 	./oeis 17
 	$(MAKE) use
 
-$(TARGET): $(OBJS) | $(PGO_DIR)
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) -o $@
+$(TARGETS): %: $(OBJ_DIR)/%.o $(UTIL_OBJS) | $(PGO_DIR)
+	$(CC) $(CFLAGS) $< $(UTIL_OBJS) $(LDFLAGS) -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR) $(PGO_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -58,10 +63,10 @@ $(OBJ_DIR) $(PGO_DIR):
 -include $(DEPS)
 
 clean:
-	@rm -rf $(OBJ_DIR) $(TARGET)
+	@rm -rf $(OBJ_DIR) $(TARGETS)
 
 pgo-clean:
 	@rm -rf $(PGO_DIR)
 
-test: $(TARGET)
+test: oeis
 	@bash test.sh $(N)
