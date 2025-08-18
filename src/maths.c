@@ -1,6 +1,7 @@
 #include "debug.h"
 #include "maths.h"
 
+// Limiting prime size to 63 bits stops this overflowing
 uint64_t add_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   x += y;
   if (x >= p) x -= p;
@@ -36,6 +37,7 @@ uint64_t inv64_u64(uint64_t p) {
   return x;
 }
 
+// montgomery multiply
 uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
   uint128_t t = (uint128_t)a * b;
   uint64_t m = (uint64_t)t * p_dash;
