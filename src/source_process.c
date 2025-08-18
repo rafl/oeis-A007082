@@ -11,6 +11,7 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <stdio.h>
 
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
@@ -391,7 +392,7 @@ static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, u
 
 // Implementation of the virtual function - entrypoint for calculation
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
-  proc_state_t const *st = self->state;
+  proc_state_t *st = self->state;
   if (st->idx == st->np) return 0;
 
   // n, m, prime
@@ -480,4 +481,33 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapsho
   assert(src);
   *src = (source_t){ .next = proc_next, .destroy = proc_destroy, .state = st };
   return src;
+}
+
+
+void jack_test()
+{
+    printf("hello world!\n");
+
+  size_t n = 3;
+  size_t m = 3;
+  size_t p = 7;
+  size_t w = 2;
+  size_t vec[] = {1, 2, 0}; // sum should be n? - len should be m
+
+  size_t vec_rots[2*m];
+  uint64_t exps[n];
+  memcpy(vec_rots, vec, m*sizeof(uint64_t));
+  memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
+  create_exps(vec, m, exps);
+
+  prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+
+  size_t f_first_m  = f_fst_term(exps, ctx);
+
+  size_t f_second_m = f_snd_trm(vec, ctx);
+  size_t f_full = mont_mul(f_first_m, f_second_m, ctx->p, ctx->p_dash);
+
+  printf("first factor %lu\n", mont_mul(f_first_m, 1, ctx->p, ctx->p_dash));
+  printf("second factor %lu\n", mont_mul(f_second_m, 1, ctx->p, ctx->p_dash));
+  printf("overall %lu\n", mont_mul(f_full, 1, ctx->p, ctx->p_dash));
 }
