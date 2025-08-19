@@ -153,12 +153,14 @@ static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_
 
   uint64_t coeff = ctx->fact_M[tot];
   for (size_t i = 0; i < len; ++i)
+    // - (i==0) is to subtract 1 from the w^0 coeff  - this is why we can't only calc this once
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i] - (i == 0)], p, p_dash);
 
   return coeff;
 }
 
-// TODO - understand this better - could this be being computed more efficiently?
+// Compute the determinant via gaussian elimination
+// "we carry a factor through rather than converting all the slow inverses"
 static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
   uint64_t det = ctx->r, scaling_factor = ctx->r;
@@ -208,6 +210,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   // active groups
   // This is the indexs of the non zero elements of c
   // Which is also the powers of w they correspond to
+  // typ for type / class / colour
   size_t typ[m], r = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
@@ -222,21 +225,31 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
 
-    // This is basically the column sum of the ith column of a
+    // This is basically the column sum
     uint64_t sum = 0;
     // for each non zero power of omega w^j in our args
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
       // w^i*w^-j
       // (n.b. we could distribute over w^i here if we wanted)
+
+      // This is the inner element of A matrix from the paper (up to sign) / inner element of product sum in paper
       uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // sum += w * multiplicity of (w^j)
       sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
+
+      // let B_jk = w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+      // reorder args to f such they increase in order of power of omega
+      // Then we have (x_0, x_1, x_2...)
+      // Let B_kl = x_k*x_l^-1 / (.....)
+      // then sum(k) = sum over l of B_kl
     }
 
     prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
 
+    // prod_M - product over each deleted row / col (we're leaving 1 behind) 
+    // of the sum over l of B_kl
     // So like for each column we "delete" we multiply by the column sum...
   }
 
@@ -247,15 +260,21 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
   // quotient minor
   size_t dim = r - 1;
+  // If all terms were the same power of w and we quotiented everything out
   if (!dim)
     return prod_M;
 
+  // We're constructing the minor of the reduced matrix
+  // dropping the first row / col
   uint64_t A[dim*dim];
   for (size_t a = 1; a < r; ++a) {
     size_t i = typ[a];
 
-    // contribution from the deleted block
+    // contribution from the deleted block?????
     uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+
+    // When making the "laplaican" the diagonal is the sum of all off-diagonal elements in the row of the full matrix
+    // including the column dropped to form the minor. So we special add that to the diag here (with multiplicity)
     uint64_t diag = mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
 
     // remaining off-diagonal blocks
@@ -265,9 +284,13 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
         continue;
 
       uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      // Again fill the matrix as per it's normal terms but with multiplicity
       uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
 
+      // This is the -1 coefficient on the off diag elements
       A[(a-1)*dim + (b-1)] = p - v;
+      // and add it to the total for the diag elements
       diag = add_mod_u64(diag, v, p);
     }
 
@@ -333,7 +356,7 @@ static void *residue_for_prime(void *ud) {
     for (size_t c = 0; c < n_vec; ++c) {
       // each vector has len m
       // each vector contains "necklace normalized" coefficient counts
-      // i.e. 1 3 7 = 1 lot of w^1, 3 lots of w^2, 7 lots of w^3
+      // i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of w^2
       size_t *vec = &vecs[c*m];
       create_exps(vec, m, exps);
       // This is the full f from the paper
@@ -352,7 +375,7 @@ static void *residue_for_prime(void *ud) {
         // Because we always have at least one 1 in our calc I guess...
         if (vec_r[0] == 0) continue;
         // TODO - why do we compute this for each loop - isn't this a constant for a given set of coeffs?
-        // Are we messing around with this a bit because of the constant 1 at the end?
+        // Are we messing around with this a bit because of the constant 1 at the end? (yes - subtract one from w^0 term)
         uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
         size_t idx = (2*r) % m;
         // coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
