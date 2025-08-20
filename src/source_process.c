@@ -107,10 +107,10 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len, size_t tot) {
+static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
-  uint64_t coeff = ctx->fact_M[tot];
+  uint64_t coeff = ctx->fact_M[ctx->n - 1];
   for (size_t i = 0; i < len; ++i)
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i]], p, p_dash);
 
@@ -270,11 +270,11 @@ static void *residue_for_prime(void *ud) {
       size_t *vec = &vecs[c*m];
       create_exps(vec, m, exps);
       uint64_t f_0 = f(vec, exps, ctx);
-      
+
       size_t vec_rots[2*m];
       memcpy(vec_rots, vec, m*sizeof(uint64_t));
       memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
-      uint64_t const coeffBaseline = multinomial_mod_p(ctx, vec, m, ctx->n-1);
+      uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
 
       // Loop over each "rotation" of the vector of argument multiplicities. This is
       // equivilent to multiplying all the coefficients by w
@@ -284,11 +284,12 @@ static void *residue_for_prime(void *ud) {
         // We require there always be at least one "1" in the arguments to f() (per the paper)
         // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
         if (vec_r[0] == 0) continue;
+
         // The multinomial coefficient would be constant over all "rotations" of the multiplicities
         // but because we're assuming at least one argument is always "1" which requires us to subtract
         // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
         // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
-        size_t coeff = mont_mul(coeffBaseline, ctx->nat_M[vec_r[0]], p, ctx->p_dash);        
+        size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec_r[0]], p, ctx->p_dash);
 
         size_t idx = (2*r) % m;
         uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
