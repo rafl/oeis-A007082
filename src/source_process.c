@@ -192,6 +192,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
+// I think that we could compute this for the *vect form of this if we liked
 // The full product over all pairwise combinations
 static uint64_t f_fst_term(uint64_t *exps, const prim_ctx_t *ctx) {
   uint64_t acc = ctx->r; // r is basically 1 in mont form
