@@ -514,9 +514,16 @@ void jack_test()
 
   size_t n = 3;
   size_t m = 3;
-  size_t p = 7;
+  // size_t p = 7;
   size_t w = 2;
   size_t vec[] = {1, 2, 0}; // sum should be n? - len should be m
+
+  size_t np;
+
+  size_t* primes = build_prime_list(n, m, 1, P_STRIDE, &np);
+
+  size_t p = *primes;
+  printf("p=%lu\n", p);
 
   size_t vec_rots[2*m];
   uint64_t exps[n];
