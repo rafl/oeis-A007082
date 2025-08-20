@@ -281,12 +281,13 @@ static void *residue_for_prime(void *ud) {
       for (size_t r = 0; r < m; ++r) {
         size_t *vec_r = vec_rots + r;
 
-        // We require there always be at least one 1 in the arguments to f() (per the paper)
+        // We require there always be at least one "1" in the arguments to f() (per the paper)
         // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
         if (vec_r[0] == 0) continue;
         // The multinomial coefficient would be constant over all "rotations" of the multiplicities
-        // but because we're assuming at least 1 argument is always 1. Rater than recompute the full
-        // coeff each time we can take a baseline value and multiply by j to convert 1/j! to 1/(j-1!)
+        // but because we're assuming at least one argument is always "1" which requires us to subtract
+        // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
+        // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
         size_t coeff = mont_mul(coeffBaseline, ctx->nat_M[vec_r[0]], p, ctx->p_dash);        
 
         size_t idx = (2*r) % m;
