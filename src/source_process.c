@@ -110,9 +110,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
-  size_t tot = 0;
-  for (size_t i = 0; i < len; ++i)
-    tot += ms[i] - (i == 0);
+  size_t tot = ctx->n -1;
 
   uint64_t coeff = ctx->fact_M[tot];
   for (size_t i = 0; i < len; ++i)
@@ -274,13 +272,34 @@ static void *residue_for_prime(void *ud) {
       size_t *vec = &vecs[c*m];
       create_exps(vec, m, exps);
       uint64_t f_0 = f(vec, exps, ctx);
+      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
       size_t vec_rots[2*m];
       memcpy(vec_rots, vec, m*sizeof(uint64_t));
       memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
+      size_t * prevFirstTerm = NULL;
+
+      // Loop over each "rotation" of the vector of argument multiplicities. This is
+      // equivilent to multiplying all the coefficients by w
       for (size_t r = 0; r < m; ++r) {
         size_t *vec_r = vec_rots + r;
+
+        // We require there always be at least one 1 in the arguments to f() (per the paper)
+        // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
         if (vec_r[0] == 0) continue;
-        uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
+        if (prevFirstTerm != NULL)
+        {
+          // The multinomial coefficient would be constant over all "rotations" of the multiplicities
+          // but because we're assuming at least 1 argument is always 1 - we subtract 1 from the 
+          // multinomial coefficient corresponding to the 1 arguments. Rather than recompute the 
+          // full coefficient we can remove the compensation factor from the previous "1" multiplicit
+          // and then apply the new compensation factor
+          if (*prevFirstTerm != *vec_r)
+          {
+            coeff = mont_mul(coeff, ctx->fact_M[(*prevFirstTerm) -1], p, ctx->p_dash);
+            coeff = mont_mul(coeff, ctx->fact_inv_M[(*vec_r) -1], p , ctx->p_dash);
+          }
+        }
+        prevFirstTerm = vec_r;
         size_t idx = (2*r) % m;
         uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
         l_acc = add_mod_u64(l_acc, f_n, p);
