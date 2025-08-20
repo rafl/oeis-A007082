@@ -82,15 +82,15 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
-  ctx->fact_M = malloc(n*sizeof(uint64_t));
+  ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_M);
   ctx->fact_M[0] = ctx->r;
-  for (size_t i = 1; i < n; ++i)
+  for (size_t i = 1; i < n+1; ++i)
     ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
-  ctx->fact_inv_M = malloc(n*sizeof(uint64_t));
+  ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_inv_M);
-  ctx->fact_inv_M[n-1] = mont_inv(ctx->fact_M[n-1], ctx->r, p, ctx->p_dash);
-  for (size_t i = n-1; i; --i)
+  ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r, p, ctx->p_dash);
+  for (size_t i = n; i; --i)
     ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);
 
   return ctx;
@@ -107,14 +107,12 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
+static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len, size_t tot) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
-
-  size_t tot = ctx->n -1;
 
   uint64_t coeff = ctx->fact_M[tot];
   for (size_t i = 0; i < len; ++i)
-    coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i] - (i == 0)], p, p_dash);
+    coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i]], p, p_dash);
 
   return coeff;
 }
@@ -272,34 +270,26 @@ static void *residue_for_prime(void *ud) {
       size_t *vec = &vecs[c*m];
       create_exps(vec, m, exps);
       uint64_t f_0 = f(vec, exps, ctx);
-      uint64_t coeff = multinomial_mod_p(ctx, vec, m);
+      
       size_t vec_rots[2*m];
       memcpy(vec_rots, vec, m*sizeof(uint64_t));
       memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
-      size_t * prevFirstTerm = NULL;
+      uint64_t const coeffBaseline = multinomial_mod_p(ctx, vec, m, ctx->n-1);
 
       // Loop over each "rotation" of the vector of argument multiplicities. This is
       // equivilent to multiplying all the coefficients by w
+      // printf("start_of_calc\n");
       for (size_t r = 0; r < m; ++r) {
         size_t *vec_r = vec_rots + r;
 
         // We require there always be at least one 1 in the arguments to f() (per the paper)
         // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
         if (vec_r[0] == 0) continue;
-        if (prevFirstTerm != NULL)
-        {
-          // The multinomial coefficient would be constant over all "rotations" of the multiplicities
-          // but because we're assuming at least 1 argument is always 1 - we subtract 1 from the 
-          // multinomial coefficient corresponding to the 1 arguments. Rather than recompute the 
-          // full coefficient we can remove the compensation factor from the previous "1" multiplicit
-          // and then apply the new compensation factor
-          if (*prevFirstTerm != *vec_r)
-          {
-            coeff = mont_mul(coeff, ctx->fact_M[(*prevFirstTerm) -1], p, ctx->p_dash);
-            coeff = mont_mul(coeff, ctx->fact_inv_M[(*vec_r) -1], p , ctx->p_dash);
-          }
-        }
-        prevFirstTerm = vec_r;
+        // The multinomial coefficient would be constant over all "rotations" of the multiplicities
+        // but because we're assuming at least 1 argument is always 1. Rater than recompute the full
+        // coeff each time we can take a baseline value and multiply by j to convert 1/j! to 1/(j-1!)
+        size_t coeff = mont_mul(coeffBaseline, ctx->nat_M[vec_r[0]], p, ctx->p_dash);        
+
         size_t idx = (2*r) % m;
         uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
         l_acc = add_mod_u64(l_acc, f_n, p);
