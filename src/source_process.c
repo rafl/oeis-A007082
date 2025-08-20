@@ -507,6 +507,31 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapsho
   return src;
 }
 
+typedef struct {
+  uint64_t value;
+  uint64_t index;
+} root_of_unity_t;
+
+
+void print_summary(size_t val, root_of_unity_t const * roots, size_t m)
+{
+  printf("value = %lu that is:", val);
+  for (size_t i = 0; i < m; i++)
+  {
+    printf("%lu*w^%lu + ", val/roots[i].value, roots[i].index);
+    val %= roots[i].value;
+  }
+  printf("\n");
+}
+
+int comp_root(const void * e1, const void * e2)
+{
+  root_of_unity_t* elem1 = (root_of_unity_t*) e1;
+  root_of_unity_t* elem2 = (root_of_unity_t*) e2;
+  if (elem1->value < elem2->value) return 1;
+  if (elem1->value > elem2->value) return -1;
+  return 0;
+}
 
 void jack_test()
 {
@@ -515,15 +540,30 @@ void jack_test()
   size_t n = 3;
   size_t m = 3;
   // size_t p = 7;
-  size_t w = 2;
-  size_t vec[] = {1, 2, 0}; // sum should be n? - len should be m
+  
+  size_t vec[] = {3, 0, 0}; // sum should be n? - len should be m
 
   size_t np;
 
   size_t* primes = build_prime_list(n, m, 1, P_STRIDE, &np);
 
   size_t p = *primes;
-  printf("p=%lu\n", p);
+  size_t const w = mth_root_mod_p(p, m);
+
+  root_of_unity_t roots[n];
+  uint64_t cur = 1;
+  for (size_t i = 0; i < m; i++)
+  {
+    roots[i].index = i;
+    roots[i].value = cur;
+    printf("w^%lu=%lu\n", i, cur);
+    cur = mul_mod_u64(cur, w, p);
+  }
+  printf("w^%lu=%lu\n", m, cur);
+
+  qsort(roots, n, sizeof(root_of_unity_t), comp_root);
+
+  printf("p=%lu, w=%lu\n", p, w);
 
   size_t vec_rots[2*m];
   uint64_t exps[n];
@@ -538,7 +578,10 @@ void jack_test()
   size_t f_second_m = f_snd_trm(vec, ctx);
   size_t f_full = mont_mul(f_first_m, f_second_m, ctx->p, ctx->p_dash);
 
-  printf("first factor %lu\n", mont_mul(f_first_m, 1, ctx->p, ctx->p_dash));
-  printf("second factor %lu\n", mont_mul(f_second_m, 1, ctx->p, ctx->p_dash));
-  printf("overall %lu\n", mont_mul(f_full, 1, ctx->p, ctx->p_dash));
+  printf("first factor\n");
+  print_summary(mont_mul(f_first_m, 1, ctx->p, ctx->p_dash), roots, m);
+  printf("second factor\n");
+  print_summary(mont_mul(f_second_m, 1, ctx->p, ctx->p_dash), roots, m);
+  printf("overall\n");
+  print_summary(mont_mul(f_full, 1, ctx->p, ctx->p_dash), roots, m);
 }
