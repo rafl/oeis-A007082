@@ -278,7 +278,6 @@ static void *residue_for_prime(void *ud) {
 
       // Loop over each "rotation" of the vector of argument multiplicities. This is
       // equivilent to multiplying all the coefficients by w
-      // printf("start_of_calc\n");
       for (size_t r = 0; r < m; ++r) {
         size_t *vec_r = vec_rots + r;
 
