@@ -15,15 +15,18 @@ static void *progress(void *_ud) {
   progress_st_t *ud = _ud;
   size_t tot = ud->tot, prev = 0;
   _Atomic size_t *done = ud->done;
+  struct timespec last = ud->start;
 
   pthread_mutex_lock(&ud->mu);
   while (!ud->quit) {
-    size_t d = atomic_load_explicit(done, memory_order_relaxed);
-    double rate = (double)(d-prev) / (PROG_INT*1e6);
-    prev = d;
-    double pct = 100.0 * d / tot;
     struct timespec now;
     clock_gettime(_CLOCK, &now);
+    size_t d = atomic_load_explicit(done, memory_order_relaxed);
+    double dt = (now.tv_sec - last.tv_sec) + (now.tv_nsec - last.tv_nsec)*1e-9;
+    double rate = (double)(d-prev) / (dt*1e6);
+    prev = d;
+    last = now;
+    double pct = 100.0 * d / tot;
     double elapsed = (now.tv_sec - ud->start.tv_sec) + (now.tv_nsec - ud->start.tv_nsec)*1e-9;
     double eta = (d && d < tot) ? elapsed * (tot - d) / d : 0.0;
     int eh = elapsed / 3600, es = (int)elapsed % 60, em = ((int)elapsed / 60) % 60;
