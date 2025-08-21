@@ -16,18 +16,6 @@ static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
 }
 
-static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
-  size_t idx = 0;
-
-  for (size_t exp = 0; exp < len; ++exp) {
-    size_t reps = ms[exp] - (exp == 0);
-    for (size_t k = 0; k < reps; ++k)
-      dst[idx++] = exp;
-  }
-
-  dst[idx] = 0;
-}
-
 typedef struct {
   uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *nat_inv_M, *jk_sums_M, *ws_M, *fact_M, *fact_inv_M;
 } prim_ctx_t;
@@ -148,14 +136,29 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
-static uint64_t f_fst_term(uint64_t *exps, const prim_ctx_t *ctx) {
+static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
+  const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
   uint64_t acc = ctx->r;
-  for (size_t j = 0; j < ctx->n; ++j) {
-    for (size_t k = j + 1; k < ctx->n; ++k) {
-      uint64_t t = ctx->jk_sums_M[jk_pos(exps[j], exps[k], ctx->m)];
-      acc = mont_mul(acc, t, ctx->p, ctx->p_dash);
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = c[a];
+    if (ca >= 2) {
+      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
+      uint64_t e = (ca*(ca-1)) / 2;
+      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
     }
   }
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = c[a];
+    if (!ca) continue;
+    for (size_t b = a+1; b < m; ++b) {
+      uint64_t cb = c[b];
+      if (!cb) continue;
+      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
+    }
+  }
+
   return acc;
 }
 
@@ -218,8 +221,8 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
+  return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 typedef struct {
@@ -257,8 +260,7 @@ static resume_cb_t w_idle(void *ud) {
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
-  uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
-  uint64_t exps[n], l_acc = 0;
+  uint64_t m = ctx->m, p = ctx->p, l_acc = 0;
   size_t *vecs = worker->vecs;
   worker->l_acc = &l_acc;
 
@@ -268,8 +270,7 @@ static void *residue_for_prime(void *ud) {
 
     for (size_t c = 0; c < n_vec; ++c) {
       size_t *vec = &vecs[c*m];
-      create_exps(vec, m, exps);
-      uint64_t f_0 = f(vec, exps, ctx);
+      uint64_t f_0 = f(vec, ctx);
       uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
 
       // Loop over each "rotation" of the vector of argument multiplicities. This is
