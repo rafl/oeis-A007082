@@ -14,10 +14,12 @@
 
 static void *progress(void *_ud) {
   progress_st_t *ud = _ud;
-  size_t tot = ud->tot, prev = 0;
+  size_t tot = ud->tot;
   _Atomic size_t *done = ud->done;
   struct timespec last = ud->start;
   double rate_avg = 0;
+  // technically there's a race? it's fine!
+  size_t prev = atomic_load_explicit(done, memory_order_relaxed);
 
   pthread_mutex_lock(&ud->mu);
   while (!ud->quit) {
