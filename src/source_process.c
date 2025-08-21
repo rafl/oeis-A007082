@@ -142,6 +142,29 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
+static void build_drop_mat(uint64_t *A, size_t dim, uint64_t *exps, prim_ctx_t *ctx) {
+  const size_t r = dim+1;
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  for (size_t j = 0; j < dim; ++j) {
+    uint64_t acc = 0;
+
+    for (size_t k = 0; k < r; ++k) if (j != k) {
+      const size_t pos = jk_pos(exps[j], exps[k], m);
+      uint64_t t = ctx->jk_prod_M[pos];
+
+      acc = add_mod_u64(acc, t, p);
+
+      if (k < dim) {
+        A[j*dim + k] = (t == 0) ? 0 : p - t;
+      }
+    }
+
+    A[j*dim + j] = acc;
+  }
+}
+
+
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
@@ -262,7 +285,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
   // Put this isn't the only difference
 
-  
+
   // We divide by the multiplicty of 1??
 
   // quotient minor
@@ -312,6 +335,14 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 // Vec is staying in count space (so would be ) [1, 2, 1, 0, 1] for above
 static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+}
+
+uint64_t f_snd_trm_old(uint64_t *vec, uint64_t *exps, prim_ctx_t *ctx) {
+  size_t dim = ctx->n-1;
+  uint64_t A[dim*dim];
+
+  build_drop_mat(A, dim, exps, ctx);
+  return mont_mul(det_mod_p(A, dim, ctx), 1, ctx->p, ctx->p_dash);
 }
 
 // state of whole process (shared over threads)
@@ -591,6 +622,7 @@ void jack_test()
 
     size_t f_second_m = f_snd_trm(vec_rots+i, ctx);
     size_t f_full = mont_mul(f_first_m, f_second_m, ctx->p, ctx->p_dash);
+    size_t old = f_snd_trm_old(vec_rots+i, exps, ctx);
 
     size_t idx = (2*i) % m;
     // coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
@@ -599,6 +631,7 @@ void jack_test()
 
     printf("first factor %lu\n", mont_mul(f_first_m, 1, ctx->p, ctx->p_dash));
     printf("second factor  %lu\n", mont_mul(f_second_m, 1, ctx->p, ctx->p_dash));
+    printf("second factor old %lu\n", mont_mul(old, 1, ctx->p, ctx->p_dash));
     printf("second dave factor  %lu\n", mont_mul(f_2_n, 1, ctx->p, ctx->p_dash));
     printf("overall  %lu\n", mont_mul(f_full, 1, ctx->p, ctx->p_dash));
   }
