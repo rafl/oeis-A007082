@@ -254,9 +254,15 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     // So like for each column we "delete" we multiply by the column sum...
   }
 
+  // #### Up to here prod_M is the same
   // Prod M = product[a = 0->r-1] sum[b = 0->1-r] w^coeff_cnt[a] * w^-coeff_cnt[b]
 
+  // #### And here is the point is diverges
   prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+
+  // Put this isn't the only difference
+
+  
   // We divide by the multiplicty of 1??
 
   // quotient minor
@@ -537,11 +543,11 @@ void jack_test()
 {
     printf("hello world!\n");
 
-  size_t n = 3;
-  size_t m = 3;
+  size_t n = 5;
+  size_t m = 5;
   // size_t p = 7;
   
-  size_t vec[] = {3, 0, 0}; // sum should be n? - len should be m
+  size_t vec[] = {1, 2, 2, 0, 0}; // sum should be n? - len should be m
 
   size_t np;
 
@@ -565,23 +571,35 @@ void jack_test()
 
   printf("p=%lu, w=%lu\n", p, w);
 
-  size_t vec_rots[2*m];
-  uint64_t exps[n];
-  memcpy(vec_rots, vec, m*sizeof(uint64_t));
-  memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
-  create_exps(vec, m, exps);
-
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
-  size_t f_first_m  = f_fst_term(exps, ctx);
+  uint64_t vec_rots[2*m];
+  uint64_t exps[n];
+  memcpy(vec_rots, vec, m*sizeof(uint64_t));
+  memcpy(vec_rots+m, vec, m*sizeof(uint64_t));
+  
 
-  size_t f_second_m = f_snd_trm(vec, ctx);
-  size_t f_full = mont_mul(f_first_m, f_second_m, ctx->p, ctx->p_dash);
+  
+  size_t f_2_0 = f_snd_trm(vec_rots, ctx);
 
-  printf("first factor\n");
-  print_summary(mont_mul(f_first_m, 1, ctx->p, ctx->p_dash), roots, m);
-  printf("second factor\n");
-  print_summary(mont_mul(f_second_m, 1, ctx->p, ctx->p_dash), roots, m);
-  printf("overall\n");
-  print_summary(mont_mul(f_full, 1, ctx->p, ctx->p_dash), roots, m);
+
+  for (size_t i = 0; i < m; i++)
+  {
+    if (vec_rots[i] == 0) continue;
+    create_exps(vec_rots+i, m, exps);
+    size_t f_first_m  = f_fst_term(exps, ctx);
+
+    size_t f_second_m = f_snd_trm(vec_rots+i, ctx);
+    size_t f_full = mont_mul(f_first_m, f_second_m, ctx->p, ctx->p_dash);
+
+    size_t idx = (2*i) % m;
+    // coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
+    uint64_t f_2_n = mont_mul(f_2_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash);
+
+
+    printf("first factor %lu\n", mont_mul(f_first_m, 1, ctx->p, ctx->p_dash));
+    printf("second factor  %lu\n", mont_mul(f_second_m, 1, ctx->p, ctx->p_dash));
+    printf("second dave factor  %lu\n", mont_mul(f_2_n, 1, ctx->p, ctx->p_dash));
+    printf("overall  %lu\n", mont_mul(f_full, 1, ctx->p, ctx->p_dash));
+  }
 }
