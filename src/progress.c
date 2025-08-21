@@ -25,18 +25,18 @@ static void *progress(void *_ud) {
     clock_gettime(_CLOCK, &now);
     size_t d = atomic_load_explicit(done, memory_order_relaxed);
     double dt = (now.tv_sec - last.tv_sec) + (now.tv_nsec - last.tv_nsec)*1e-9;
-    double rate = (double)(d-prev) / (dt*1e6);
+    double rate = (double)(d-prev) / dt;
     if (rate_avg == 0) rate_avg = rate;
     else rate_avg += (dt / (PROG_RATE_TAU+dt)) * (rate-rate_avg);
     prev = d;
     last = now;
     double pct = 100.0 * d / tot;
     double elapsed = (now.tv_sec - ud->start.tv_sec) + (now.tv_nsec - ud->start.tv_nsec)*1e-9;
-    double eta = (d && d < tot) ? elapsed * (tot - d) / d : 0.0;
+    double eta = (d && d < tot && rate_avg > 0) ? (tot-d) / rate_avg : 0.0;
     int eh = elapsed / 3600, es = (int)elapsed % 60, em = ((int)elapsed / 60) % 60;
     int th = (eta / 3600), ts = (int)eta % 60, tm = ((int)eta / 60) % 60;
     fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | %.2fM/s | ETA %02d:%02d:%02d (%"PRIu64")",
-            pct, eh, em, es, rate_avg, th, tm, ts, ud->p);
+            pct, eh, em, es, rate_avg/1e6, th, tm, ts, ud->p);
     if (d >= tot) break;
     now.tv_sec += PROG_INT;
     pthread_cond_timedwait(&ud->cv, &ud->mu, &now);
