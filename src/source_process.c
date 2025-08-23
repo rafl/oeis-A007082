@@ -17,9 +17,6 @@ static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
 }
 
-// precomputation of shared forms
-// "montgomery form" (do some bitshifts and then a mult instead of a divide)
-// That's in maths.c
 typedef struct {
   uint64_t n, m, p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff _M implies something is in montgomery form
@@ -96,18 +93,18 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
 
-  // i! for i = 1 to n
-  ctx->fact_M = malloc(n*sizeof(uint64_t));
+  // i! for i = 1 to n+1
+  ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_M);
   ctx->fact_M[0] = ctx->r;
-  for (size_t i = 1; i < n; ++i)
+  for (size_t i = 1; i < n+1; ++i)
     ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
 
-  // 1/i! for i = 1 to n
-  ctx->fact_inv_M = malloc(n*sizeof(uint64_t));
+  // 1/i! for i = 1 to n+1
+  ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_inv_M);
-  ctx->fact_inv_M[n-1] = mont_inv(ctx->fact_M[n-1], ctx->r, p, ctx->p_dash);
-  for (size_t i = n-1; i; --i)
+  ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r, p, ctx->p_dash);
+  for (size_t i = n; i; --i)
     ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);
 
   return ctx;
@@ -128,15 +125,9 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
-  size_t tot = 0;
-  // is this total not just n - 1?
+  uint64_t coeff = ctx->fact_M[ctx->n - 1];
   for (size_t i = 0; i < len; ++i)
-    tot += ms[i] - (i == 0);
-
-  uint64_t coeff = ctx->fact_M[tot];
-  for (size_t i = 0; i < len; ++i)
-    // - (i==0) is to subtract 1 from the w^0 coeff  - this is why we can't only calc this once
-    coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i] - (i == 0)], p, p_dash);
+    coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i]], p, p_dash);
 
   return coeff;
 }
@@ -188,16 +179,29 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
-// I think that we could compute this for the *vect form of this if we liked
-// The full product over all pairwise combinations
-static uint64_t f_fst_term(uint64_t *exps, const prim_ctx_t *ctx) {
-  uint64_t acc = ctx->r; // r is basically 1 in mont form
-  for (size_t j = 0; j < ctx->n; ++j) {
-    for (size_t k = j + 1; k < ctx->n; ++k) {
-      uint64_t t = ctx->jk_sums_M[jk_pos(exps[j], exps[k], ctx->m)];
-      acc = mont_mul(acc, t, ctx->p, ctx->p_dash);
+static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
+  const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
+  uint64_t acc = ctx->r;
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = c[a];
+    if (ca >= 2) {
+      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
+      uint64_t e = (ca*(ca-1)) / 2;
+      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
     }
   }
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = c[a];
+    if (!ca) continue;
+    for (size_t b = a+1; b < m; ++b) {
+      uint64_t cb = c[b];
+      if (!cb) continue;
+      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
+    }
+  }
+
   return acc;
 }
 
@@ -304,10 +308,8 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-// Exps = exponents of powers of unity [0, 1, 1, 2, 4] -> [1, w, w, w^2, w^4]
-// Vec is staying in count space (so would be ) [1, 2, 1, 0, 1] for above
-static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
+  return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 // state of whole process (shared over threads)
@@ -347,8 +349,7 @@ static resume_cb_t w_idle(void *ud) {
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
-  uint64_t n = ctx->n, m = ctx->m, p = ctx->p;
-  uint64_t exps[n], /* what are you?*/ l_acc = 0; // l_acc is where we're going to accumulate the total residual from the stuff we pull from our work queue
+  uint64_t m = ctx->m, p = ctx->p, l_acc = 0; // l_acc is where we're going to accumulate the total residual from the stuff we pull from our work queue
   size_t *vecs = worker->vecs;
   worker->l_acc = &l_acc;
 
@@ -361,25 +362,22 @@ static void *residue_for_prime(void *ud) {
       // each vector contains "necklace normalized" coefficient counts
       // i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of w^2
       size_t *vec = &vecs[c*m];
-      create_exps(vec, m, exps);
-      // This is the full f from the paper
-      // We evaluate it in two halfs (the product and the matrix determinant from theorem 2)
-      uint64_t f_0 = f(vec, exps, ctx);
-      size_t vec_rots[2*m];
-      memcpy(vec_rots, vec, m*sizeof(uint64_t));
-      memcpy(vec_rots+m, vec_rots, m*sizeof(uint64_t));
-      // go over each "rotation" of the vector - this is the same as multiply by omega
-      // e.g. go from f_0 = f(1 3 7 0) to f_1(0 1 3 7) is the equivient of multiplying each coeffecient
-      // by omega
-      // we index in reverse to make this the same as multiplying by w
+      uint64_t f_0 = f(vec, ctx);
+      uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+
+      // Loop over each "rotation" of the vector of argument multiplicities. This is
+      // equivilent to multiplying all the coefficients by w
       for (size_t r = 0; r < m; ++r) {
-        size_t *vec_r = vec_rots + r;
-        // We can skip this because... I am not sure
-        // Because we always have at least one 1 in our calc I guess...
-        if (vec_r[0] == 0) continue;
-        // TODO - why do we compute this for each loop - isn't this a constant for a given set of coeffs?
-        // Are we messing around with this a bit because of the constant 1 at the end? (yes - subtract one from w^0 term)
-        uint64_t coeff = multinomial_mod_p(ctx, vec_r, m);
+        // We require there always be at least one "1" in the arguments to f() (per the paper)
+        // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
+        if (vec[r] == 0) continue;
+
+        // The multinomial coefficient would be constant over all "rotations" of the multiplicities
+        // but because we're assuming at least one argument is always "1" which requires us to subtract
+        // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
+        // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
+        size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+
         size_t idx = (2*r) % m;
         // coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
         uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
