@@ -11,25 +11,10 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <stdio.h>
 
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
-}
-
-static void create_exps(size_t *ms, size_t len, uint64_t *dst) {
-  size_t idx = 0;
-
-  for (size_t exp = 0; exp < len; ++exp) {
-    // number of times we're repeating a given coeff is ms[exp] - unless exp == for some reasons
-    // and then we subtract 1?
-    // Oh because we always have 1 as one of the args? Hmmm ok
-    // I guess this is why we skip the zero case too?
-    size_t reps = ms[exp] - (exp == 0);
-    for (size_t k = 0; k < reps; ++k)
-      dst[idx++] = exp; // So we're turning 1 3 7 into 1 2 2 2 3 3 3 3 3 3 3 ( except for the skip the first 1 thing)
-  }
-
-  dst[idx] = 0;
 }
 
 // precomputation of shared forms
@@ -139,44 +124,63 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
+// Calculate the multinomal coefficient where the powers of x_i are given by *ms
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
   size_t tot = 0;
+  // is this total not just n - 1?
   for (size_t i = 0; i < len; ++i)
     tot += ms[i] - (i == 0);
 
   uint64_t coeff = ctx->fact_M[tot];
   for (size_t i = 0; i < len; ++i)
+    // - (i==0) is to subtract 1 from the w^0 coeff  - this is why we can't only calc this once
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i] - (i == 0)], p, p_dash);
 
   return coeff;
 }
 
+// Compute the determinant via gaussian elimination
+// "we carry a factor through rather than converting all the slow inverses"
 static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
   uint64_t det = ctx->r, scaling_factor = ctx->r;
 
+  // we're saying the thing multiplied by dim is the row index
+  // for each pivot "column"
   for (size_t k = 0; k < dim; ++k) {
+    // start with pivot "row" being the same as col
     size_t pivot_i = k;
+    // skip over rows if the cell is zero
     while (pivot_i < dim && A[pivot_i*dim + k] == 0) ++pivot_i;
+    // if there was non zero cell - det is zero
     if (pivot_i == dim) return 0;
+    // if we did skip over some cells
+
+
+    // This really just handles the case where a zero is on the diagonal
+    // not used much besides
     if (pivot_i != k) {
+      // we're going to swap two sub... rows? - using k
       for (size_t j = 0; j < dim; ++j) {
         uint64_t tmp = A[k*dim + j];
         A[k*dim + j] = A[pivot_i*dim + j];
         A[pivot_i*dim + j] = tmp;
       }
-      det = p - det;
+      det = p - det; // flip this sign
     }
 
     uint64_t pivot = A[k*dim + k];
+    // multiply in our "pivot" point value
     det = mont_mul(det, pivot, p, p_dash);
 
+    // This is the actual subtraction logic
     for (size_t i = k + 1; i < dim; ++i) {
       scaling_factor = mont_mul(scaling_factor, pivot, p, p_dash);
       uint64_t multiplier = A[i*dim + k];
       for (size_t j = k; j < dim; ++j)
+      // mul and subtract off the rest
         A[i*dim + j] = mont_mul_sub(A[i*dim + j], pivot, A[k*dim + j], multiplier, p, p_dash);
     }
   }
@@ -184,8 +188,10 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
+// I think that we could compute this for the *vect form of this if we liked
+// The full product over all pairwise combinations
 static uint64_t f_fst_term(uint64_t *exps, const prim_ctx_t *ctx) {
-  uint64_t acc = ctx->r;
+  uint64_t acc = ctx->r; // r is basically 1 in mont form
   for (size_t j = 0; j < ctx->n; ++j) {
     for (size_t k = j + 1; k < ctx->n; ++k) {
       uint64_t t = ctx->jk_sums_M[jk_pos(exps[j], exps[k], ctx->m)];
@@ -304,6 +310,7 @@ static uint64_t f(uint64_t *vec, uint64_t *exps, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_term(exps, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
+// state of whole process (shared over threads)
 typedef struct {
   uint64_t n, /* element of seq */ m, /*w is the mth root of unity*/ *ps /* list of primes */;
   size_t idx /* withth prime*/, np /* number of primes*/, *vecss /*Some buffers for vectors*/;
@@ -408,6 +415,9 @@ static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, u
   *res = ret;
   return 1;
 }
+
+
+// Implementation of the virtual function - entrypoint for calculation
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   proc_state_t *st = self->state;
   if (st->idx == st->np) return 0;
