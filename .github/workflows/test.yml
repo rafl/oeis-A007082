@@ -30,7 +30,7 @@ jobs:
           brew update
           brew install llvm libomp
       - name: Build
-        run: make optimised
+        run: make
         env:
           CC: ${{ matrix.compiler }}
       - name: Run test suite
