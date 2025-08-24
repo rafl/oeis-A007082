@@ -53,6 +53,7 @@ inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
 
 uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t r, uint64_t p, uint64_t p_dash) {
   uint64_t acc = r;
+  // Compute by repeated squaring
   while (e) {
     if (e & 1)
       acc = mont_mul(acc, b, p, p_dash);
@@ -66,6 +67,7 @@ uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
   return mont_pow(x, p-2, r, p, p_dash);
 }
 
+// Does a1 * b1 - a2 * b2
 uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2, uint64_t p, uint64_t p_dash) {
   uint128_t t1 = (uint128_t)a1 * b1;
   uint128_t t2 = (uint128_t)a2 * b2;
