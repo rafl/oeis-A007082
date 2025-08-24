@@ -6,9 +6,13 @@
 #include <stdbool.h>
 #include <pthread.h>
 
+// This is how many calcs per iteration we do
 #define CHUNK (1UL<<17)
 #define Q_CAP 64
 
+// shared over all threads - used to pull the next work task
+
+// (there is a "queue thread" that fills up the queue with more tasks)
 typedef struct {
   size_t *scratch, *buf, *vecs;
   size_t head, tail, cap, fill, m;

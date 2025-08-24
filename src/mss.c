@@ -130,6 +130,8 @@ static uint64_t binom(size_t n, size_t k) {
   return (uint64_t)(num / den);
 }
 
+// number of different elements in cannonical form 
+//(i.e. considering just the set of args, not the order)
 size_t canon_iter_size(size_t m, size_t n) {
   size_t g = gcd(m, n);
   uint64_t sum = 0;
