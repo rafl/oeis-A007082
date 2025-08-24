@@ -236,7 +236,7 @@ typedef struct {
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
   queue_t *q;
-  size_t *vecs;
+  uint64_t *vecs;
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;

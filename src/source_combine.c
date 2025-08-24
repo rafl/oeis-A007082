@@ -5,7 +5,8 @@
 #include <inttypes.h>
 #include <stdlib.h>
 
-static int stdin_next(source_t *, uint64_t *res, uint64_t *p) {
+static int stdin_next(source_t * unused, uint64_t *res, uint64_t *p) {
+  (void) unused;
   return scanf("%"SCNu64" %% %"SCNu64, res, p) == 2;
 }
 
