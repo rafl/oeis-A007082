@@ -6,11 +6,14 @@
 #include "progress.h"
 #include "queue.h"
 #include "snapshot.h"
+#include "cyclotomic_field.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
 #include <unistd.h>
+
+using FieldT = CyclomaticFieldValue;
 
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
@@ -105,9 +108,11 @@ static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_
   return coeff;
 }
 
-static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
+template <typename FieldT>
+static FieldT det_mod_p(FieldT *A, size_t dim, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t det = ctx->r, scaling_factor = ctx->r;
+  auto det = FieldT::One(ctx->m)
+  auto scaling_factor = FieldT::One(ctx->m);
 
   for (size_t k = 0; k < dim; ++k) {
     size_t pivot_i = k;
@@ -126,26 +131,27 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     det = mont_mul(det, pivot, p, p_dash);
 
     for (size_t i = k + 1; i < dim; ++i) {
-      scaling_factor = mont_mul(scaling_factor, pivot, p, p_dash);
+      scaling_factor.MultiplyBy(pivot);
       uint64_t multiplier = A[i*dim + k];
       for (size_t j = k; j < dim; ++j)
         A[i*dim + j] = mont_mul_sub(A[i*dim + j], pivot, A[k*dim + j], multiplier, p, p_dash);
     }
   }
 
-  return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
+  return det.MultiplyBy(FieldT::Invert(scaling_factor));
 }
 
-static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
+template <typename FieldT>
+static FieldT f_fst_term(uint64_t * multiplicities, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t acc = ctx->r;
+  FieldT acc = FieldT::One(m);
 
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
     if (ca >= 2) {
       uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
       uint64_t e = (ca*(ca-1)) / 2;
-      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
+      acc.MultiplyBy(field_pow(base, e));
     }
   }
 

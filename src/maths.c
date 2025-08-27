@@ -60,6 +60,19 @@ uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t r, uint64_t p, uint64_t p_das
   return acc;
 }
 
+template <typename FieldT>
+uint64_t field_pow(FieldT const & b, uint64_t e, uint64_t m) {
+  FieldT acc = FieldT::One(m);
+  while (e) {
+    if (e & 1) {
+      acc.MultiplyBy(b);
+    }
+    b.MultiplyBy(b);
+    e >>= 1;
+  }
+  return acc;
+}
+
 uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
   return mont_pow(x, p-2, r, p, p_dash);
 }

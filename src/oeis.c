@@ -3,7 +3,6 @@
 #include "combine.h"
 #include "source_combine.h"
 #include "source_process.h"
-#include "cyclotomic_field.h"
 
 #include <stdio.h>
 #include <inttypes.h>
