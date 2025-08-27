@@ -21,21 +21,27 @@ void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch) {
 size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len) {
   size_t n = (4+it->m+1)*sizeof(uint64_t);
   assert(len >= n);
-  uint64_t *out = buf;
-  memcpy(out, (uint64_t[]){ it->t, it->p, it->sum, it->stage }, 4*sizeof(uint64_t));
+  uint64_t *out = (uint64_t *)buf;
+ 
+  out[0] = it->t;
+  out[1] = it->p;
+  out[2] = it->sum;
+  out[3] = it->stage;
+
+  // memcpy(out, (uint64_t[]) { it->t, it->p, it->sum, it->stage }, 4*sizeof(uint64_t));
   memcpy(out+4, it->scratch, (it->m+1)*sizeof(uint64_t));
   return n;
 }
 
 void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch, const void *buf, size_t len) {
   assert(len >= (4+m+1)*sizeof(uint64_t));
-  const uint64_t *in = buf;
+  const uint64_t *in = (uint64_t *)buf;
   it->m = m;
   it->tot = tot;
   it->t = in[0];
   it->p = in[1];
   it->sum = in[2];
-  it->stage = in[3];
+  it->stage = (canon_iter_stage_t)in[3];
   it->scratch = scratch;
   memcpy(it->scratch, in+4, (m+1)*sizeof(uint64_t));
 }

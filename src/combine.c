@@ -5,7 +5,7 @@
 #include <gmp.h>
 
 comb_ctx_t *comb_ctx_new() {
-  comb_ctx_t *ctx = malloc(sizeof(comb_ctx_t));
+  comb_ctx_t *ctx = (comb_ctx_t *)malloc(sizeof(comb_ctx_t));
   mpz_inits(ctx->X, ctx->M, NULL);
   mpz_set_ui(ctx->X, 0);
   mpz_set_ui(ctx->M, 1);

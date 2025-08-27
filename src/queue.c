@@ -5,8 +5,12 @@
 #include <string.h>
 #include <stdatomic.h>
 
+#ifdef __cplusplus
+#define restrict
+#endif
+
 queue_t *queue_new(size_t n, size_t m, const void *iter_st, size_t st_len, size_t *vecs) {
-  queue_t *q = malloc(sizeof(queue_t));
+  queue_t *q = (queue_t *)malloc(sizeof(queue_t));
   assert(q);
   q->head = q->tail = q->fill = 0;
   q->cap = Q_CAP * CHUNK;
@@ -16,7 +20,7 @@ queue_t *queue_new(size_t n, size_t m, const void *iter_st, size_t st_len, size_
   pthread_cond_init(&q->not_empty, NULL);
   pthread_cond_init(&q->not_full, NULL);
   pthread_cond_init(&q->resume, NULL);
-  q->scratch = malloc((m+1)*sizeof(size_t));
+  q->scratch = (size_t *) malloc((m+1)*sizeof(size_t));
   assert(q->scratch);
   if (st_len)
     canon_iter_resume(&q->it, m, n, q->scratch, iter_st, st_len);

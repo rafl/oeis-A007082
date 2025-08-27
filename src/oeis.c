@@ -39,8 +39,8 @@ int main (int argc, char **argv) {
 
     switch (c) {
       case 'm': m_id = parse_uint(optarg); break;
-      case 'p': mode |= MODE_PROCESS; break;
-      case 'c': mode |= MODE_COMBINE; break;
+      case 'p': mode = (prog_mode_t) (mode | MODE_PROCESS); break;
+      case 'c': mode = (prog_mode_t) (mode | MODE_COMBINE); break;
       case 'q': quiet = true; break;
       case 's': snapshot = true; break;
     }
@@ -59,7 +59,7 @@ int main (int argc, char **argv) {
   uint64_t res, p;
   while (src->next(src, &res, &p) > 0) {
     if (mode & MODE_PROCESS && !quiet)
-      printf("%"PRIu64" %% %"PRIu64"\n", res, p);
+      printf("%" PRIu64 " %% %" PRIu64 "\n", res, p);
     if (mode & MODE_COMBINE) {
       converged = comb_ctx_add(crt, res, p);
 
@@ -67,7 +67,7 @@ int main (int argc, char **argv) {
         if (quiet) {
           if (converged) gmp_printf("%Zd\n", crt->X);
         } else {
-          gmp_printf("e(%"PRIu64") %s %Zd\n  after %zu primes, mod %Zd\n",
+          gmp_printf("e(%" PRIu64 ") %s %Zd\n  after %zu primes, mod %Zd\n",
                      n, converged ? "=" : ">=", crt->X, i+1, crt->M);
         }
         if (converged && mode & MODE_PROCESS) break;

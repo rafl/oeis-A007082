@@ -1,11 +1,11 @@
-CFLAGS := -g -std=gnu18 -O3 -march=native -flto -Wall -Wextra \
+CFLAGS := -g -std=c++23 -O3 -march=native -flto -Wall -Wextra \
           $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
 PGO ?= none
 PGO_DIR ?= build/pgo
 PROFDATA := $(PGO_DIR)/default.profdata
-IS_CLANG := $(shell $(CC) --version 2>/dev/null | grep -q clang && echo 1)
+IS_CLANG := $(shell $(CXX) --version 2>/dev/null | grep -q clang && echo 1)
 
 ifeq ($(PGO),gen)
 CFLAGS += -fprofile-generate=$(PGO_DIR)
@@ -52,10 +52,10 @@ optimised:
 	$(MAKE) use
 
 $(TARGETS): %: $(OBJ_DIR)/%.o $(UTIL_OBJS) | $(PGO_DIR)
-	$(CC) $(CFLAGS) $< $(UTIL_OBJS) $(LDFLAGS) -o $@
+	$(CXX) $(CFLAGS) $< $(UTIL_OBJS) $(LDFLAGS) -o $@
 
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR) $(PGO_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CXX) $(CFLAGS) -c $< -o $@
 
 $(OBJ_DIR) $(PGO_DIR):
 	@mkdir -p $@

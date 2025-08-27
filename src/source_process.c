@@ -233,7 +233,7 @@ typedef struct {
 } proc_state_t;
 
 typedef struct {
-  _Atomic size_t *done;
+  Atomic *done;
   const prim_ctx_t *ctx;
   queue_t *q;
   size_t *vecs;
@@ -330,7 +330,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   const size_t siz = canon_iter_size(m, n);
 
-  _Atomic size_t done = 0;
+  Atomic done = 0;
   uint64_t acc = 0;
 
   uint64_t iter_st[m+5];

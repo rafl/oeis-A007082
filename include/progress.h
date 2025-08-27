@@ -6,8 +6,15 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+#ifdef __cplusplus 
+#include <atomic>
+#define Atomic std::atomic<size_t>
+#else
+#define Atomic _Atomic size_t
+#endif
+
 typedef struct {
-  _Atomic size_t *done;
+  Atomic * done;
   size_t tot;
   bool quit;
   pthread_cond_t cv;
@@ -21,5 +28,5 @@ typedef struct {
   pthread_t prog;
 } progress_t;
 
-void progress_start(progress_t *, uint64_t, _Atomic size_t *, size_t);
+void progress_start(progress_t *, uint64_t, Atomic *, size_t);
 void progress_stop(progress_t *restrict);

@@ -80,7 +80,7 @@ static size_t primes_needed(uint64_t n) {
 
 uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t stride, size_t *out_np) {
   size_t np = primes_needed(n);
-  uint64_t *ps = malloc(np * sizeof(*ps));
+  uint64_t *ps = (uint64_t *) malloc(np * sizeof(*ps));
   assert(ps);
 
   uint64_t stride_m = stride*m;

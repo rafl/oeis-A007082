@@ -15,6 +15,10 @@
 #  define _CLOCK CLOCK_MONOTONIC
 #endif
 
+#ifdef __cplusplus
+#define restrict
+#endif
+
 static void get_snapshot_path(uint64_t n, uint64_t p, char *buf, size_t len) {
   snprintf(buf, len, ".%"PRIu64".%"PRIu64".ss", n, p);
 }
@@ -51,7 +55,7 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
 }
 
 static void *snapshot(void *ud) {
-  snapshot_st_t *st = ud;
+  snapshot_st_t *st = (snapshot_st_t *) ud;
   pthread_mutex_lock(&st->mu);
   while (!st->quit) {
     struct timespec now;
@@ -88,9 +92,20 @@ static void *snapshot(void *ud) {
   return NULL;
 }
 
-void snapshot_start(snapshot_t *ss, uint64_t n, uint64_t p, size_t n_thrds, queue_t *q, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
+// typedef struct {
+//   Atomic *idx;
+//   bool **paused;
+//   queue_t *q;
+//   uint64_t *acc, n, p;
+//   size_t n_thrds;
+//   pthread_mutex_t mu;
+//   pthread_cond_t cv;
+//   bool quit;
+// } snapshot_st_t;
+
+void snapshot_start(snapshot_t *ss, uint64_t n, uint64_t p, size_t n_thrds, queue_t *q, bool **paused, Atomic *idx, uint64_t *acc) {
   snapshot_st_t *st = &ss->st;
-  *st = (snapshot_st_t){ .n = n, .p = p, .n_thrds = n_thrds, .q = q, .paused = paused, .idx = idx, .acc = acc };
+  *st = (snapshot_st_t){.idx = idx, .paused = paused, .q = q, .acc = acc, .n = n, .p = p, .n_thrds = n_thrds };
   pthread_mutex_init(&st->mu, NULL);
   pthread_condattr_t ca;
   pthread_condattr_init(&ca);
@@ -115,7 +130,7 @@ void snapshot_stop(snapshot_t *restrict ss) {
   pthread_mutex_destroy(&st->mu);
 }
 
-void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc, void *iter_st, size_t *st_len) {
+void snapshot_try_resume(uint64_t n, uint64_t p, Atomic *done, uint64_t *acc, void *iter_st, size_t *st_len) {
   char path[PATH_MAX];
   get_snapshot_path(n, p, path, sizeof(path));
   *st_len = 0;

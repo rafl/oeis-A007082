@@ -8,8 +8,15 @@
 #include <pthread.h>
 #include <stdatomic.h>
 
+#ifdef __cplusplus 
+#include <atomic>
+#define Atomic std::atomic<size_t>
+#else
+#define Atomic _Atomic size_t
+#endif
+
 typedef struct {
-  _Atomic size_t *idx;
+  Atomic *idx;
   bool **paused;
   queue_t *q;
   uint64_t *acc, n, p;
@@ -24,6 +31,6 @@ typedef struct {
   snapshot_st_t st;
 } snapshot_t;
 
-void snapshot_start(snapshot_t *, uint64_t, uint64_t, size_t, queue_t *, bool **, _Atomic size_t *, uint64_t *);
+void snapshot_start(snapshot_t *, uint64_t, uint64_t, size_t, queue_t *, bool **, Atomic *, uint64_t *);
 void snapshot_stop(snapshot_t *restrict);
-void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc, void *iter_st, size_t *st_len);
+void snapshot_try_resume(uint64_t n, uint64_t p, Atomic *done, uint64_t *acc, void *iter_st, size_t *st_len);
