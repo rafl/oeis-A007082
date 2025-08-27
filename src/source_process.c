@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <stdio.h>
 
 using FieldT = CyclomaticFieldValue;
 
@@ -20,13 +21,23 @@ static uint64_t m_for(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, p_dash, r, r2, *jk_prod_M, *nat_M, *nat_inv_M, *jk_sums_M, *ws_M, *fact_M, *fact_inv_M;
+  uint64_t n, m, p, //n = number of veritcies //obvious
+  p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
+  *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+  *nat_M, // natural numbers up to n (inclusive)
+  *nat_inv_M, // inverses of natural numbers up to n (inclusive)
+  *jk_sums_M, // w^-j*w^k + w^j*w^-k 
+  *ws_M, // powers of omega (m form)
+  *fact_M, // i! for i <= n
+  *fact_inv_M; // 1/i! for i <= n
 } prim_ctx_t;
 
+// index into rectangular array
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
   return j*m + k;
 }
 
+// shared over threads - not mutated
 static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   prim_ctx_t *ctx = (prim_ctx_t *) malloc(sizeof(prim_ctx_t));
   assert(ctx);
@@ -37,17 +48,22 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
 
+  // initialize roots of unity
   ctx->ws_M = (uint64_t*) malloc(m*sizeof(uint64_t));
   assert(ctx->ws_M);
   ctx->ws_M[0] = ctx->r;
   ctx->ws_M[1] = mont_mul(w, ctx->r2, p, ctx->p_dash);
   for (size_t i = 2; i < m; ++i)
     ctx->ws_M[i] = mont_mul(ctx->ws_M[i-1], ctx->ws_M[1], p, ctx->p_dash);
+
+  // w^j * w^-k lookup - not actually inserted into the context
   uint64_t jk_pairs_M[m*m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
       jk_pairs_M[jk_pos(j, k, m)] = mont_mul(ctx->ws_M[j], ctx->ws_M[k ? m-k : 0], p, ctx->p_dash);
   }
+
+  // cache of // w^-j*w^k + w^j*w^-k 
   ctx->jk_sums_M = (uint64_t*) malloc(m*m*sizeof(uint64_t));
   assert(ctx->jk_sums_M);
   for (size_t j = 0; j < m; ++j) {
@@ -55,6 +71,8 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       ctx->jk_sums_M[jk_pos(j, k, m)] =
         add_mod_u64(jk_pairs_M[jk_pos(j, k, m)], jk_pairs_M[jk_pos(k, j, m)], p);
   }
+
+  // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   ctx->jk_prod_M = (uint64_t*) malloc(m*m*sizeof(uint64_t));
   assert(ctx->jk_prod_M);
   for (size_t j = 0; j < m; ++j) {
@@ -64,20 +82,28 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
     }
   }
+
+  // 1 to n
   ctx->nat_M = (uint64_t*) malloc((n+1)*sizeof(uint64_t));
   assert(ctx->nat_M);
   for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
+
+  // 1/i for i = 1 to n
   ctx->nat_inv_M = (uint64_t*) malloc((n + 1) * sizeof(uint64_t));
   assert(ctx->nat_inv_M);
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
+
+  // i! for i = 1 to n+1
   ctx->fact_M = (uint64_t*) malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_M);
   ctx->fact_M[0] = ctx->r;
   for (size_t i = 1; i < n+1; ++i)
     ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
+
+  // 1/i! for i = 1 to n+1
   ctx->fact_inv_M = (uint64_t*) malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_inv_M);
   ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r, p, ctx->p_dash);
@@ -98,6 +124,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
+// Calculate the multinomal coefficient where the powers of x_i are given by *ms
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
@@ -108,6 +135,8 @@ static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_
   return coeff;
 }
 
+// Compute the determinant via gaussian elimination
+// we cary the denominator through and only compute a single inverse at the end
 template <typename FieldT>
 static FieldT det_mod_p(FieldT *A, size_t dim, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
@@ -116,24 +145,35 @@ static FieldT det_mod_p(FieldT *A, size_t dim, const prim_ctx_t *ctx) {
 
   for (size_t k = 0; k < dim; ++k) {
     size_t pivot_i = k;
+    // If the cell on the diagonal we're about to pivot off is zero - find the next row with a non zero entry in that col
     while (pivot_i < dim && A[pivot_i*dim + k] == 0) ++pivot_i;
+    // if there was no non-zero cell - det is zero
     if (pivot_i == dim) return 0;
+
+    
     if (pivot_i != k) {
+      // We swap the rows over so that we have a non zero el on the diagonal
       for (size_t j = 0; j < dim; ++j) {
         uint64_t tmp = A[k*dim + j];
         A[k*dim + j] = A[pivot_i*dim + j];
         A[pivot_i*dim + j] = tmp;
       }
-      det = p - det;
+      det = p - det; // And flip the sign of the determinant
     }
 
     uint64_t pivot = A[k*dim + k];
+    // multiply in our value on diagonal
     det = mont_mul(det, pivot, p, p_dash);
 
+    // Now do the elimination
     for (size_t i = k + 1; i < dim; ++i) {
+      // Rather than do division on each row we multiply each row up to a common factor
+      // scaling factor is where we record the product of thse numbers so we can divide though by
+      // at the end to compensate
       scaling_factor.MultiplyBy(pivot);
       uint64_t multiplier = A[i*dim + k];
       for (size_t j = k; j < dim; ++j)
+      // mul and subtract off the rest
         A[i*dim + j] = mont_mul_sub(A[i*dim + j], pivot, A[k*dim + j], multiplier, p, p_dash);
     }
   }
@@ -172,6 +212,9 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups
+  // This is the indexs of the non zero elements of c
+  // Which is also the powers of w they correspond to
+  // typ for "type" aka class / colour
   size_t typ[m], r = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
@@ -181,31 +224,67 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   }
 
   uint64_t prod_M = ctx->r;
+  
+  // for each non zero power of omega w^i in our args
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
+
+    // This is basically the column sum
     uint64_t sum = 0;
+    // for each non zero power of omega w^j in our args
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
+      // w^i*w^-j
+      // (n.b. we could distribute over w^i here if we wanted)
+
+      // This is the inner element of A matrix from the paper (up to sign) / inner element of product sum in paper
       uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      // sum += w * multiplicity of (w^j)
       sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
+
+      // let B_jk = w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+      // reorder args to f such they increase in order of power of omega
+      // Then we have (x_0, x_1, x_2...)
+      // Let B_kl = x_k*x_l^-1 / (.....)
+      // then sum(k) = sum over l of B_kl
     }
 
     prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+
+    // prod_M - product over each deleted row / col (we're leaving 1 behind) 
+    // of the sum over l of B_kl
+    // So like for each column we "delete" we multiply by the column sum...
   }
 
+  // #### Up to here prod_M is the same
+  // Prod M = product[a = 0->r-1] sum[b = 0->1-r] w^coeff_cnt[a] * w^-coeff_cnt[b]
+
+  // #### And here is the point is diverges
   prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+
+  // Put this isn't the only difference
+
+
+  // We divide by the multiplicty of 1??
 
   // quotient minor
   size_t dim = r - 1;
+  // If all terms were the same power of w and we quotiented everything out
   if (!dim)
     return prod_M;
 
+  // We're constructing the minor of the reduced matrix
+  // dropping the first row / col
   uint64_t A[dim*dim];
   for (size_t a = 1; a < r; ++a) {
     size_t i = typ[a];
 
-    // contribution from the deleted block
+    // contribution from the deleted block?????
     uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+
+    // When making the "laplaican" the diagonal is the sum of all off-diagonal elements in the row of the full matrix
+    // including the column dropped to form the minor. So we special add that to the diag here (with multiplicity)
     uint64_t diag = mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
 
     // remaining off-diagonal blocks
@@ -215,15 +294,20 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
         continue;
 
       uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      // Again fill the matrix as per it's normal terms but with multiplicity
       uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
 
+      // This is the -1 coefficient on the off diag elements
       A[(a-1)*dim + (b-1)] = p - v;
+      // and add it to the total for the diag elements
       diag = add_mod_u64(diag, v, p);
     }
 
     A[(a-1)*dim + (a-1)] = diag;
   }
 
+  // I guess prod_M is some magic compensation coefficient
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
@@ -231,11 +315,12 @@ static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
+// state of whole process (shared over threads)
 typedef struct {
-  uint64_t n, m, *ps;
-  size_t idx, np, *vecss;
-  bool quiet, snapshot;
-  size_t n_thrds;
+  uint64_t n, /* element of seq */ m, /*w is the mth root of unity*/ *ps /* list of primes */;
+  size_t idx /* withth prime*/, np /* number of primes*/, *vecss /*Some buffers for vectors*/;
+  bool quiet, snapshot; /*mode stuff - saving snapshots so you can restart*/
+  size_t n_thrds; /*number of threads*/
 } proc_state_t;
 
 typedef struct {
@@ -263,10 +348,11 @@ static resume_cb_t w_idle(void *ud) {
   return w_resume;
 }
 
+// thread function for doing work on the "maths stuff"
 static void *residue_for_prime(void *ud) {
   worker_t *worker = (worker_t *)ud;
   const prim_ctx_t *ctx = worker->ctx;
-  uint64_t m = ctx->m, p = ctx->p, l_acc = 0;
+  uint64_t m = ctx->m, p = ctx->p, l_acc = 0; // l_acc is where we're going to accumulate the total residual from the stuff we pull from our work queue
   size_t *vecs = worker->vecs;
   worker->l_acc = &l_acc;
 
@@ -275,6 +361,9 @@ static void *residue_for_prime(void *ud) {
     if (!n_vec) break;
 
     for (size_t c = 0; c < n_vec; ++c) {
+      // each vector has len m
+      // each vector contains the multiplicity with which each power of omega appears in the args
+      // i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of w^2
       size_t *vec = &vecs[c*m];
       uint64_t f_0 = f(vec, ctx);
       uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
@@ -293,6 +382,9 @@ static void *residue_for_prime(void *ud) {
         size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
 
         size_t idx = (2*r) % m;
+        // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
+        // This result comes from having to permute one of the ones from one of the first n-1 args into the nth arg
+        // See the paper for more info
         uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
         l_acc = add_mod_u64(l_acc, f_n, p);
       }
@@ -326,11 +418,16 @@ static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, u
   *res = ret;
   return 1;
 }
+
+
+// Implementation of the virtual function - entrypoint for calculation
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   proc_state_t *st = (proc_state_t *) self->state;
   if (st->idx == st->np) return 0;
 
+  // n, m, prime
   uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
+  // root of unity
   uint64_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
 
@@ -350,10 +447,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   progress_t prog;
   if (!st->quiet)
-    progress_start(&prog, p, &done, siz);
+  // progress bar stuff
+  progress_start(&prog, p, &done, siz);
 
+  // shared work queue
   queue_t *q = queue_new(n, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
 
+  // make some threads
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
   bool *idles[st->n_thrds];
@@ -361,6 +461,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){ .done = &done, .ctx = ctx, .q = q, .vecs = &st->vecss[i*CHUNK*m], .acc = &acc, .acc_mu = &acc_mu, .idle = false };
     idles[i] = &w_ctxs[i].idle;
+    // worker threads
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 
