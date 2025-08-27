@@ -25,7 +25,7 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
 }
 
 static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
-  prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
+  prim_ctx_t *ctx = (prim_ctx_t *) malloc(sizeof(prim_ctx_t));
   assert(ctx);
   ctx->n = n;
   ctx->m = m;
@@ -34,7 +34,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
 
-  ctx->ws_M = malloc(m*sizeof(uint64_t));
+  ctx->ws_M = (uint64_t*) malloc(m*sizeof(uint64_t));
   assert(ctx->ws_M);
   ctx->ws_M[0] = ctx->r;
   ctx->ws_M[1] = mont_mul(w, ctx->r2, p, ctx->p_dash);
@@ -45,14 +45,14 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
     for (size_t k = 0; k < m; ++k)
       jk_pairs_M[jk_pos(j, k, m)] = mont_mul(ctx->ws_M[j], ctx->ws_M[k ? m-k : 0], p, ctx->p_dash);
   }
-  ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_sums_M = (uint64_t*) malloc(m*m*sizeof(uint64_t));
   assert(ctx->jk_sums_M);
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
       ctx->jk_sums_M[jk_pos(j, k, m)] =
         add_mod_u64(jk_pairs_M[jk_pos(j, k, m)], jk_pairs_M[jk_pos(k, j, m)], p);
   }
-  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_prod_M = (uint64_t*) malloc(m*m*sizeof(uint64_t));
   assert(ctx->jk_prod_M);
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
@@ -61,21 +61,21 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
     }
   }
-  ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
+  ctx->nat_M = (uint64_t*) malloc((n+1)*sizeof(uint64_t));
   assert(ctx->nat_M);
   for (size_t i = 0; i <= n; ++i)
     ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
-  ctx->nat_inv_M = malloc((n + 1) * sizeof(uint64_t));
+  ctx->nat_inv_M = (uint64_t*) malloc((n + 1) * sizeof(uint64_t));
   assert(ctx->nat_inv_M);
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
-  ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
+  ctx->fact_M = (uint64_t*) malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_M);
   ctx->fact_M[0] = ctx->r;
   for (size_t i = 1; i < n+1; ++i)
     ctx->fact_M[i] = mont_mul(ctx->fact_M[i-1], ctx->nat_M[i], p, ctx->p_dash);
-  ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
+  ctx->fact_inv_M = (uint64_t*) malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_inv_M);
   ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r, p, ctx->p_dash);
   for (size_t i = n; i; --i)
@@ -243,12 +243,12 @@ typedef struct {
 } worker_t;
 
 static void w_resume(void *ud) {
-  worker_t *w = ud;
+  worker_t *w = (worker_t *)ud;
   w->idle = false;
 }
 
 static resume_cb_t w_idle(void *ud) {
-  worker_t *w = ud;
+  worker_t *w = (worker_t *)ud;
   pthread_mutex_lock(w->acc_mu);
   *w->acc = add_mod_u64(*w->acc, *w->l_acc, w->ctx->p);
   *w->l_acc = 0;
@@ -258,7 +258,7 @@ static resume_cb_t w_idle(void *ud) {
 }
 
 static void *residue_for_prime(void *ud) {
-  worker_t *worker = ud;
+  worker_t *worker = (worker_t *)ud;
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t m = ctx->m, p = ctx->p, l_acc = 0;
   size_t *vecs = worker->vecs;
@@ -321,7 +321,7 @@ static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, u
   return 1;
 }
 static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
-  proc_state_t *st = self->state;
+  proc_state_t *st = (proc_state_t *) self->state;
   if (st->idx == st->np) return 0;
 
   uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
@@ -353,7 +353,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
   for (size_t i = 0; i < st->n_thrds; ++i) {
-    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
+    w_ctxs[i] = (worker_t){ .done = &done, .ctx = ctx, .q = q, .vecs = &st->vecss[i*CHUNK*m], .acc = &acc, .acc_mu = &acc_mu, .idle = false };
     idles[i] = &w_ctxs[i].idle;
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
@@ -378,7 +378,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 }
 
 static void proc_destroy(source_t *self) {
-  proc_state_t *st = self->state;
+  proc_state_t *st = (proc_state_t *)self->state;
   free(st->vecss);
   free(st->ps);
   free(st);
@@ -393,14 +393,15 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapsho
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
 
-  proc_state_t *st = malloc(sizeof(*st));
+  proc_state_t *st = (proc_state_t *)malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
-  size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
+  size_t *vecss = (size_t *)malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
   assert(vecss);
-  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
 
-  source_t *src = malloc(sizeof *src);
+  *st = (proc_state_t){ .n = n, .m = m, .ps = ps, .idx = 0, .np = np, .vecss = vecss, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds };
+
+  source_t *src = (source_t *)malloc(sizeof *src);
   assert(src);
   *src = (source_t){ .next = proc_next, .destroy = proc_destroy, .state = st };
   return src;
