@@ -72,3 +72,45 @@ uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2, uint64
   uint64_t u = (t + (uint128_t)m * p) >> 64;
   return (u >= p) ? u - p : u;
 }
+
+
+// struct MontgomeryPrimeFieldValue {
+//     MontgomeryPrimeFieldValue() : mCoefficients(m)
+//     {
+
+//     }
+
+//     static MontgomeryPrimeFieldValue One()
+//     {
+
+//     }
+
+//     static MontgomeryPrimeFieldValue Zero()
+//     {
+        
+//     }
+
+//     static MontgomeryPrimeFieldValue Add(MontgomeryPrimeFieldValue & a, MontgomeryPrimeFieldValue & b)
+//     {
+//         mont_add();
+//     }
+
+//     static MontgomeryPrimeFieldValue Multiply(MontgomeryPrimeFieldValue & a, MontgomeryPrimeFieldValue & b)
+//     {
+        
+//     }
+
+//     static MontgomeryPrimeFieldValue Invert(MontgomeryPrimeFieldValue & a)
+//     {
+        
+//     }
+
+//     static MontgomeryPrimeFieldValue Subtract(MontgomeryPrimeFieldValue & a, MontgomeryPrimeFieldValue & a)
+//     {
+        
+//     }
+
+
+
+//     size_t mValue;
+// };
