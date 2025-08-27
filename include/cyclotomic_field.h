@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <exception>
 #include <stdint.h>
 #include <vector>
@@ -36,6 +37,11 @@ coefficient_t mult(coefficient_t a, coefficient_t b)
 }
 
 struct CyclomaticFieldValue {
+    CyclomaticFieldValue()
+    {
+        // Maybe delete in future;
+    }
+
     CyclomaticFieldValue(size_t m) : mCoefficients(m, 0), mDenominator(1)
     {
 
@@ -51,6 +57,13 @@ struct CyclomaticFieldValue {
     static CyclomaticFieldValue Zero(size_t m)
     {
         return CyclomaticFieldValue(m);
+    }
+
+    static CyclomaticFieldValue Omega(size_t m)
+    {
+        CyclomaticFieldValue val(m);
+        val.mCoefficients[1] = 1;
+        return val;
     }
 
     void Accumulate(CyclomaticFieldValue const & b)
@@ -70,17 +83,32 @@ struct CyclomaticFieldValue {
         return ret;
     }
 
-    CyclomaticFieldValue MultiplyBy( CyclomaticFieldValue const & b)
+    static CyclomaticFieldValue Multiply(CyclomaticFieldValue const & a, CyclomaticFieldValue const & b)
     {
-        ASSERT(mCoefficients.size() == b.mCoefficients.size());
-        for (size_t i = 0; i < mCoefficients.size(); i++)
+       ASSERT(a.mCoefficients.size() == b.mCoefficients.size());
+       auto m = a.mCoefficients.size();
+
+       auto ret = CyclomaticFieldValue::Zero(m);
+
+       for (size_t i = 0; i < a.mCoefficients.size(); i++)
         {
-            mCoefficients[i] = mult(mCoefficients[i], b.mCoefficients[i]);
+            for (size_t j = 0; i < b.mCoefficients.size(); i++)
+            {
+                ret.mCoefficients[(i + j) % m] += mult(a.mCoefficients[i], b.mCoefficients[j]); 
+            }
         }
         
-        mDenominator = mult(mDenominator, b.mDenominator);
+        ret.mDenominator = mult(a.mDenominator, b.mDenominator);
     }
 
+    void MultiplyBy(CyclomaticFieldValue const & b)
+    {
+        *this = CyclomaticFieldValue::Multiply(*this, b);
+    }
+
+    /* To work out y = 1/x - instead solve x * y = 1
+    
+    */
     static CyclomaticFieldValue Invert(CyclomaticFieldValue & a)
     {
         (void) a;
@@ -97,14 +125,30 @@ struct CyclomaticFieldValue {
         }
     }
 
-    static CyclomaticFieldValue Subtract(CyclomaticFieldValue & a, CyclomaticFieldValue & b)
+    static CyclomaticFieldValue Subtract(CyclomaticFieldValue const & a, CyclomaticFieldValue const & b)
     {
         CyclomaticFieldValue ret = a;
         ret.Decrement(b);
         return ret;
     }
 
+    bool IsZero()
+    {
+        return std::ranges::all_of(mCoefficients, [](coefficient_t a){return a == 0;});
+    }
 
+    static CyclomaticFieldValue Negate(CyclomaticFieldValue const & a)
+    {
+        // TODO better
+        return CyclomaticFieldValue::Subtract(CyclomaticFieldValue::Zero(a.mCoefficients.size()), a);
+    }
+
+
+
+
+    // (a + b*w + c*w^2 +... ) / denom(int) and a, b, c all ints
+    // (a/a_denom + b/b_denom*w + c/c_denom*w^2 +... )
+    // (a + b*w + c*w^2 +... ) / (a + b*w + c*w^2 +... )
 
     // [a, b, c, d] -> a + b*w + c*w^2 +...
    std::vector<coefficient_t> mCoefficients;

@@ -20,7 +20,7 @@
 #endif
 
 static void get_snapshot_path(uint64_t n, uint64_t p, char *buf, size_t len) {
-  snprintf(buf, len, ".%"PRIu64".%"PRIu64".ss", n, p);
+  snprintf(buf, len, ".%" PRIu64 ".%" PRIu64 ".ss", n, p);
 }
 
 static void snapshot_save(snapshot_st_t *st, size_t idx) {
@@ -30,7 +30,7 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
 
   int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) {
-    printf("\nfailed to snapshot (open) %zu %"PRIu64"\n", idx, *st->acc);
+    printf("\nfailed to snapshot (open) %zu %" PRIu64 "\n", idx, *st->acc);
     return;
   };
 
@@ -38,13 +38,13 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
   size_t st_len = queue_save(st->q, iter_st, (4+st->q->m+1)*sizeof(uint64_t));
   uint64_t data[3] = { idx, *st->acc, st_len };
   if (write(fd, &data, sizeof(data)) != 3*sizeof(uint64_t)) {
-    printf("\nfailed to snapshot (write) %zu %"PRIu64"\n", idx, *st->acc);
+    printf("\nfailed to snapshot (write) %zu %" PRIu64 "\n", idx, *st->acc);
     close(fd);
     unlink(tmp);
     return;
   }
   if (write(fd, iter_st, st_len) != (int)st_len) {
-    printf("\nfailed to snapshot (write iter) %zu %"PRIu64"\n", idx, *st->acc);
+    printf("\nfailed to snapshot (write iter) %zu %" PRIu64 "\n", idx, *st->acc);
     close(fd);
     unlink(tmp);
     return;
