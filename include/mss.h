@@ -9,6 +9,7 @@ typedef enum {
   ITER_STAGE_BACKTRACK,
 } canon_iter_stage_t;
 
+// This stuff is the source of each unique set of coefficients
 typedef struct {
   size_t m, tot, *scratch, t, p, sum;
   canon_iter_stage_t stage;
