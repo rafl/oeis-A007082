@@ -7,7 +7,7 @@
 #include <stdatomic.h>
 
 typedef struct {
-  _Atomic size_t *done;
+  _Atomic size_t *done, *q_fill;
   size_t tot;
   bool quit;
   pthread_cond_t cv;
@@ -21,5 +21,5 @@ typedef struct {
   pthread_t prog;
 } progress_t;
 
-void progress_start(progress_t *, uint64_t, _Atomic size_t *, size_t);
+void progress_start(progress_t *, uint64_t, _Atomic size_t *, size_t, _Atomic size_t *);
 void progress_stop(progress_t *restrict);

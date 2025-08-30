@@ -1,4 +1,5 @@
 #include "progress.h"
+#include "queue.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -37,8 +38,8 @@ static void *progress(void *_ud) {
     double eta = (d && d < tot && rate_avg > 0) ? (tot-d) / rate_avg : 0.0;
     int eh = elapsed / 3600, es = (int)elapsed % 60, em = ((int)elapsed / 60) % 60;
     int th = (eta / 3600), ts = (int)eta % 60, tm = ((int)eta / 60) % 60;
-    fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | %.2fM/s | ETA %02d:%02d:%02d (%"PRIu64")",
-            pct, eh, em, es, rate_avg/1e6, th, tm, ts, ud->p);
+    fprintf(stderr, "\r%5.2f%% | %02d:%02d:%02d | %.2fM/s | %3.0f%% | ETA %02d:%02d:%02d (%"PRIu64")",
+            pct, eh, em, es, rate_avg/1e6, ((float)atomic_load_explicit(ud->q_fill, memory_order_relaxed)) * 100 / (CHUNK*Q_CAP), th, tm, ts, ud->p);
     if (d >= tot) break;
     now.tv_sec += PROG_INT;
     pthread_cond_timedwait(&ud->cv, &ud->mu, &now);
@@ -48,9 +49,9 @@ static void *progress(void *_ud) {
   return NULL;
 }
 
-void progress_start(progress_t *p, uint64_t prime, _Atomic size_t *done, size_t tot) {
+void progress_start(progress_t *p, uint64_t prime, _Atomic size_t *done, size_t tot, _Atomic size_t *q_fill) {
   progress_st_t *st = &p->st;
-  *st = (progress_st_t){ .p = prime, .done = done, .tot = tot, .quit = false };
+  *st = (progress_st_t){ .p = prime, .done = done, .tot = tot, .quit = false, .q_fill = q_fill };
   pthread_mutex_init(&st->mu, NULL);
   clock_gettime(_CLOCK, &st->start);
   pthread_condattr_t ca;

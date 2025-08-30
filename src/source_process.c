@@ -439,13 +439,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   if (done == siz) return ret(st, ctx, acc, res, p_ret);
 
-  progress_t prog;
-  if (!st->quiet)
-  // progress bar stuff
-  progress_start(&prog, p, &done, siz);
-
   // shared work queue
   queue_t *q = queue_new(n, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
+
+  progress_t prog;
+  // progress bar stuff
+  if (!st->quiet)
+    progress_start(&prog, p, &done, siz, &q->fill);
 
   // make some threads
   pthread_t worker[st->n_thrds];

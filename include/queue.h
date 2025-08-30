@@ -8,14 +8,15 @@
 
 // This is how many calcs per iteration we do
 #define CHUNK (1UL<<17)
-#define Q_CAP 64
+#define Q_CAP 16
 
 // shared over all threads - used to pull the next work task
 
 // (there is a "queue thread" that fills up the queue with more tasks)
 typedef struct {
   size_t *scratch, *buf, *vecs;
-  size_t head, tail, cap, fill, m;
+  size_t head, tail, cap, m;
+  _Atomic size_t fill;
   bool done, pause;
   canon_iter_t it;
   pthread_mutex_t mu;
