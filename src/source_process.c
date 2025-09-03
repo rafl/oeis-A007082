@@ -75,7 +75,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k) {
       size_t pos = jk_pos(j, k, m);
-      uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, p, ctx->p_dash);
+      uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, ctx->r2, p, ctx->p_dash);
       ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
     }
   }
@@ -91,7 +91,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   assert(ctx->nat_inv_M);
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
-    ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, p, ctx->p_dash);
+    ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r, ctx->r2, p, ctx->p_dash);
 
   // i! for i = 1 to n+1
   ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
@@ -103,7 +103,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
   // 1/i! for i = 1 to n+1
   ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_inv_M);
-  ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r, p, ctx->p_dash);
+  ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r, ctx->r2, p, ctx->p_dash);
   for (size_t i = n; i; --i)
     ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);
 
@@ -173,7 +173,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     }
   }
 
-  return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
+  return mont_mul(det, mont_inv(scaling_factor, ctx->r, ctx->r2, p, p_dash), p, p_dash);
 }
 
 static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
@@ -404,7 +404,7 @@ static size_t get_num_threads() {
 }
 
 static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, uint64_t *p_ret) {
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->r2, ctx->p, ctx->p_dash);
   uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
   prim_ctx_free(ctx);
 

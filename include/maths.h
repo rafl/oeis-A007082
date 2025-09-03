@@ -12,5 +12,5 @@ uint64_t sub_mod_u64(uint64_t, uint64_t, uint64_t);
 uint64_t inv64_u64(uint64_t);
 uint64_t mont_mul(uint64_t, uint64_t, uint64_t, uint64_t);
 uint64_t mont_pow(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
-uint64_t mont_inv(uint64_t, uint64_t, uint64_t, uint64_t);
+uint64_t mont_inv(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
 uint64_t mont_mul_sub(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
