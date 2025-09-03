@@ -140,13 +140,13 @@ uint64_t new_mont_inv(uint64_t x, uint64_t r2, uint64_t p, uint64_t p_dash) {
 
 uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t r2, uint64_t p, uint64_t p_dash)
 {
-  uint64_t old_val = old_mont_inv(x, r, p, p_dash);
+  // uint64_t old_val = old_mont_inv(x, r, p, p_dash);
   uint64_t new_val = new_mont_inv(x, r2, p, p_dash);
-  if (old_val != new_val)
-  {
-   assert(old_val == new_val && "mismatch");
-  }
-  return old_val;
+  // if (old_val != new_val)
+  // {
+  //  assert(old_val == new_val && "mismatch");
+  // }
+  return new_val;
 }
 
 
