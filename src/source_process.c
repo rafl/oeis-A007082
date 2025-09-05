@@ -387,9 +387,13 @@ static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
   // TODO it is super silly to do this every time in the loop rather than outside the loop
-  // (n-1)*(n-1) / n
+  // last step is return offset * (n-1)*(n-1) / n
+
+  // 
 
   uint64_t ret = jack_offset(vec, ctx);
+
+
   // TODO we're currently passing n in as really what's n-2
 
   // ret = mont_mul(ret, ctx->nat_M[ctx->n+1], ctx->p, ctx->p_dash);
