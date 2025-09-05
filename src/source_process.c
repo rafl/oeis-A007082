@@ -14,7 +14,7 @@
 #include <stdio.h>
 
 static uint64_t m_for(uint64_t n) {
-  return 2*((n+1)/4)+1;
+  return 2*((n+1)/4)-1;
 }
 
 typedef struct {
@@ -331,11 +331,11 @@ static uint64_t jack_offset_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
 
   for (size_t i = 0; i < stride; i++)
   {
-    A[i * stride + stride -1] = -1;
+    A[i * stride + stride -1] = 1// ctx->p-ctx->r;
     A[i * stride + stride -2] = 0;
     A[(stride-1) * stride + i] = 0;
-    A[(stride-2) * stride + i] = -1;
-    A[i*stride + stride] +=1;
+    A[(stride-2) * stride + i] = 1 //ctx->p-ctx->r;
+    A[i*stride + stride] += 1; //todo
   }
 
 
@@ -347,7 +347,8 @@ static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
 }
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+  return jack_offset(vec, ctx);
+  // return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 
@@ -532,6 +533,9 @@ static void proc_destroy(source_t *self) {
 
 source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   uint64_t m = m_for(n);
+  printf("n = %lu\n", n);
+  printf("m = %lu\n", m);
+
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
