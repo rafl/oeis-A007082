@@ -386,7 +386,21 @@ static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
 }
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
-  return jack_offset(vec, ctx);
+  // TODO it is super silly to do this every time in the loop rather than outside the loop
+  // (n-1)*(n-1) / n
+
+  uint64_t ret = jack_offset(vec, ctx);
+  // TODO we're currently passing n in as really what's n-2
+
+  // ret = mont_mul(ret, ctx->nat_M[ctx->n+1], ctx->p, ctx->p_dash);
+  // ret = mont_mul(ret, ctx->nat_M[ctx->n+1], ctx->p, ctx->p_dash);
+
+  // uint64_t denom = add_mod_u64(ctx->nat_M[ctx->n], ctx->nat_M[2], ctx->p);
+  // uint64_t denom_inv = mont_inv(denom, ctx->r, ctx->p, ctx->p_dash);
+
+  // ret = mont_mul(ret, denom_inv, ctx->p, ctx->p_dash);
+
+  return ret;
   // return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
@@ -441,8 +455,14 @@ static void *residue_for_prime(void *ud) {
       // each vector contains the multiplicity with which each power of omega appears in the args
       // i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of w^2
       size_t *vec = &vecs[c*m];
+
+      uint64_t v_rot[m*2];
+      memcpy(v_rot, vec, m * sizeof(uint64_t));
+      memcpy(v_rot + m, vec, m * sizeof(uint64_t));
       uint64_t f_0 = f(vec, ctx);
       uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+
+      
 
       // Loop over each "rotation" of the vector of argument multiplicities. This is
       // equivilent to multiplying all the coefficients by w
@@ -457,11 +477,12 @@ static void *residue_for_prime(void *ud) {
         // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
         size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
 
-        size_t idx = (2*r) % m;
+        // size_t idx = (2*r) % m;
         // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
         // This result comes from having to permute one of the ones from one of the first n-1 args into the nth arg
         // See the paper for more info
-        uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
+        // uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
+        uint64_t f_n = mont_mul(coeff, f(v_rot+r, ctx), p, ctx->p_dash);
         l_acc = add_mod_u64(l_acc, f_n, p);
       }
     }
