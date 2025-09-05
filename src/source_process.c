@@ -256,7 +256,7 @@ static uint64_t make_A_matrix(uint64_t *c, const prim_ctx_t *ctx, uint64_t *A, s
 
   // #### And here is the point is diverges
   prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
-  
+
   // If all terms were the same power of w and we quotiented everything out
   if (!stride)
     return prod_M;
@@ -313,9 +313,43 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), ctx->p, ctx->p_dash);
 }
 
+
+static uint64_t jack_offset_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
+{
+  size_t r = 0;
+  for (size_t i = 0; i < ctx->m; ++i) {
+    if (c[i]) {
+      ++r;
+    }
+  }
+  size_t dim = r - 1;
+  size_t stride = dim + 2;
+
+  uint64_t A[(stride)*(stride)];
+
+  uint64_t prod_M = make_A_matrix(c, ctx, A, stride);
+
+  for (size_t i = 0; i < stride; i++)
+  {
+    A[i * stride + stride -1] = -1;
+    A[i * stride + stride -2] = 0;
+    A[(stride-1) * stride + i] = 0;
+    A[(stride-2) * stride + i] = -1;
+    A[i*stride + stride] +=1;
+  }
+
+
+  return mont_mul(prod_M, det_mod_p(A, dim, ctx), ctx->p, ctx->p_dash);
+}
+
+static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
+  return mont_mul(f_fst_term(vec, ctx), jack_offset_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+}
+
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
+
 
 // state of whole process (shared over threads)
 typedef struct {
