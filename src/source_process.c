@@ -14,7 +14,7 @@
 #include <stdio.h>
 
 static uint64_t m_for(uint64_t n) {
-  return 2*((n+1)/4)-1;
+  return 2*((n+1)/4)+1;
 }
 
 typedef struct {
@@ -50,6 +50,25 @@ static void create_exps(size_t *ms, // "necklace normalzed" coefficients
   }
 
   dst[idx] = 0;
+}
+
+static void build_drop_mat(uint64_t *A, size_t r, uint64_t *exps, prim_ctx_t const *ctx, uint64_t stride) {
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  for (size_t j = 0; j < r; ++j) {
+    uint64_t acc = 0;
+
+    for (size_t k = 0; k < r; ++k) if (j != k) {
+      const size_t pos = jk_pos(exps[j], exps[k], m);
+      uint64_t t = ctx->jk_prod_M[pos];
+
+      acc = add_mod_u64(acc, t, p);
+
+      A[j*stride + k] = (t == 0) ? 0 : p - t;
+    }
+
+    A[j*stride + j] = acc;
+  }
 }
 
 // shared over threads - not mutated
@@ -332,32 +351,34 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
 }
 
 
+//note we're putting in n-2 etc
 static uint64_t jack_offset_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
 {
-  size_t r = 0;
-  for (size_t i = 0; i < ctx->m; ++i) {
-    if (c[i]) {
-      ++r;
-    }
-  }
-  size_t dim = r - 1;
-  size_t stride = dim + 2;
+  uint64_t exps[ctx->n];
+  create_exps(c, ctx->m, exps);
+
+
+  size_t stride = ctx->n + 1;
 
   uint64_t A[(stride)*(stride)];
 
-  uint64_t prod_M = make_A_matrix(c, ctx, A, stride);
+  build_drop_mat(A, ctx->n, exps, ctx, stride);
 
   for (size_t i = 0; i < stride; i++)
   {
-    A[i * stride + stride -1] = 1// ctx->p-ctx->r;
-    A[i * stride + stride -2] = 0;
-    A[(stride-1) * stride + i] = 0;
-    A[(stride-2) * stride + i] = 1 //ctx->p-ctx->r;
-    A[i*stride + stride] += 1; //todo
+    // A[i * stride + stride -1] = ctx->p-ctx->r;
+    A[i * stride + stride -1] = 0;
+    
+    A[(stride-1) * stride + i] = ctx->p-ctx->r;
+    // A[(stride-1) * stride + i] = 0;
+    A[i*stride + i] = add_mod_u64(A[i*stride + i], ctx->r, ctx->p); //todo
   }
 
+  // A[(stride-1)*stride + (stride -1)] = 0;
+  A[(stride-1)*stride + (stride -1)] = add_mod_u64(ctx->nat_M[stride-1], ctx->nat_M[2], ctx->p); // WHY!?!?!?
 
-  return mont_mul(prod_M, det_mod_p(A, dim, ctx), ctx->p, ctx->p_dash);
+
+  return det_mod_p(A, stride, ctx);
 }
 
 static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
