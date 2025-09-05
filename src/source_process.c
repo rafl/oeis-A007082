@@ -202,7 +202,7 @@ static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
   return acc;
 }
 
-static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
+static uint64_t make_A_matrix(uint64_t *c, const prim_ctx_t *ctx, uint64_t *A, size_t stride) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups
@@ -256,21 +256,13 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
   // #### And here is the point is diverges
   prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
-
-  // Put this isn't the only difference
-
-
-  // We divide by the multiplicty of 1??
-
-  // quotient minor
-  size_t dim = r - 1;
+  
   // If all terms were the same power of w and we quotiented everything out
-  if (!dim)
+  if (!stride)
     return prod_M;
 
   // We're constructing the minor of the reduced matrix
   // dropping the first row / col
-  uint64_t A[dim*dim];
   for (size_t a = 1; a < r; ++a) {
     size_t i = typ[a];
 
@@ -293,16 +285,32 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
       uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
 
       // This is the -1 coefficient on the off diag elements
-      A[(a-1)*dim + (b-1)] = p - v;
+      A[(a-1)*stride + (b-1)] = p - v;
       // and add it to the total for the diag elements
       diag = add_mod_u64(diag, v, p);
     }
 
-    A[(a-1)*dim + (a-1)] = diag;
+    A[(a-1)*stride + (a-1)] = diag;
   }
 
   // I guess prod_M is some magic compensation coefficient
-  return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
+  return prod_M;
+}
+
+static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
+{
+  size_t r = 0;
+  for (size_t i = 0; i < ctx->m; ++i) {
+    if (c[i]) {
+      ++r;
+    }
+  }
+  size_t dim = r - 1;
+
+  uint64_t A[(dim)*(dim)];
+
+  uint64_t prod_M = make_A_matrix(c, ctx, A, dim);
+  return mont_mul(prod_M, det_mod_p(A, dim, ctx), ctx->p, ctx->p_dash);
 }
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
