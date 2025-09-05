@@ -34,6 +34,24 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
   return j*m + k;
 }
 
+static void create_exps(size_t *ms, // "necklace normalzed" coefficients
+  size_t len, 
+  uint64_t *dst) {
+  size_t idx = 0;
+
+  for (size_t exp = 0; exp < len; ++exp) {
+    // number of times we're repeating a given coeff is ms[exp] - unless exp == for some reasons
+    // and then we subtract 1?
+    // Oh because we always have 1 as one of the args? Hmmm ok
+    // I guess this is why we skip the zero case too?
+    size_t reps = ms[exp] - (exp == 0);
+    for (size_t k = 0; k < reps; ++k)
+      dst[idx++] = exp; // So we're turning 1 3 7 into 1 2 2 2 3 3 3 3 3 3 3 ( except for the skip the first 1 thing)
+  }
+
+  dst[idx] = 0;
+}
+
 // shared over threads - not mutated
 static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
   prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
