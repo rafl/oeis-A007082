@@ -375,7 +375,7 @@ static uint64_t jack_offset_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
   }
 
   // A[(stride-1)*stride + (stride -1)] = 0;
-  A[(stride-1)*stride + (stride -1)] = add_mod_u64(ctx->nat_M[stride-1], ctx->nat_M[2], ctx->p); // WHY!?!?!?
+  A[(stride-1)*stride + (stride -1)] = add_mod_u64(ctx->nat_M[stride-1], ctx->nat_M[1], ctx->p);
 
 
   return det_mod_p(A, stride, ctx);
@@ -386,23 +386,11 @@ static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
 }
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
-  // TODO it is super silly to do this every time in the loop rather than outside the loop
-  // last step is return offset * (n-1)*(n-1) / n
-
-  // 
-
   uint64_t ret = jack_offset(vec, ctx);
 
+  // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
+  ret = mont_mul(ret, add_mod_u64(ctx->nat_M[ctx->n-1], ctx->nat_M[2], ctx->p), ctx->p, ctx->p_dash);
 
-  // TODO we're currently passing n in as really what's n-2
-
-  // ret = mont_mul(ret, ctx->nat_M[ctx->n+1], ctx->p, ctx->p_dash);
-  // ret = mont_mul(ret, ctx->nat_M[ctx->n+1], ctx->p, ctx->p_dash);
-
-  // uint64_t denom = add_mod_u64(ctx->nat_M[ctx->n], ctx->nat_M[2], ctx->p);
-  // uint64_t denom_inv = mont_inv(denom, ctx->r, ctx->p, ctx->p_dash);
-
-  // ret = mont_mul(ret, denom_inv, ctx->p, ctx->p_dash);
 
   return ret;
   // return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
