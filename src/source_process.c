@@ -334,61 +334,142 @@ static uint64_t make_A_matrix(uint64_t *c, const prim_ctx_t *ctx, uint64_t *A, s
   return prod_M;
 }
 
-static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
-{
-  size_t r = 0;
-  for (size_t i = 0; i < ctx->m; ++i) {
+
+static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  // active groups
+  // This is the indexs of the non zero elements of c
+  // Which is also the powers of w they correspond to
+  // typ for "type" aka class / colour
+  size_t typ[m], r = 0;
+  for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
+      typ[r] = i;
       ++r;
     }
   }
-  size_t dim = r - 1;
 
-  uint64_t A[(dim)*(dim)];
+  uint64_t prod_M = ctx->r;
+  
+  // for each non zero power of omega w^i in our args
+  for (size_t a = 0; a < r; ++a) {
+    size_t i = typ[a];
 
-  uint64_t prod_M = make_A_matrix(c, ctx, A, dim);
-  return mont_mul(prod_M, det_mod_p(A, dim, ctx), ctx->p, ctx->p_dash);
+    // Jack wants to add 1 to the diagonal
+    uint64_t sum = ctx->r;
+    // for each non zero power of omega w^j in our args
+    for (size_t b = 0; b < r; ++b) {
+      // gou
+
+      size_t j = typ[b];
+
+      // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      //sum is gunna be our diagonal element for this row / the row sum
+      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
+    }
+
+    // so prod m is the product of the row sums of the rows we're deleting
+    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+  }
+
+  // we divide prod_M by the multiplicty of 1 because... ?
+  // Probably something to do with us not dropping one of the ones or sth?
+  // I'll try taking it out
+  // prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+
+  // If all terms were the same power of w and we quotiented everything out
+  if (r == 1)
+    return prod_M;
+
+  // We're constructing the minor of the reduced matrix
+  uint64_t A[r*r];
+  for (size_t a = 0; a < r; ++a) {
+    // looking t the w^i args
+    size_t i = typ[a];
+  
+    // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
+    // uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+
+    // we're taking the multiplicity of 1 * this term
+    // Jack wants this to start at 1 again
+    uint64_t diag = ctx->r; //mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
+
+    // remaining off-diagonal blocks
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+      // going over w^j args
+
+      if (j == i)
+        continue;
+
+      // we're we're treading the 1 term as special... yeah ok I guess it's because it doesn't go in the matrix?
+      // so this is the new "w del"
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      // Again fill the matrix as per it's normal terms but with multiplicity
+      uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
+
+      // This is the -1 coefficient on the off diag elements
+      A[(a)*r + (b)] = p - v;
+      // and add it to the total for the diag elements
+      diag = add_mod_u64(diag, v, p);
+    }
+
+    A[(a)*r + (a)] = diag;
+  }
+
+  // I guess prod_M is some magic compensation coefficient
+  uint64_t ret = mont_mul(prod_M, det_mod_p(A, r, ctx), p, ctx->p_dash);
+  return ret;
+  // return mont_mul(ret, ctx->nat_M[ctx->n+1], ctx->p, ctx->p_dash);
 }
+
 
 
 //note we're putting in n-2 etc
-static uint64_t jack_offset_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
-{
-  uint64_t exps[ctx->n];
-  create_exps(c, ctx->m, exps);
+// static uint64_t jack_offset_snd_trm(uint64_t *c, const prim_ctx_t *ctx)
+// {
+//   uint64_t exps[ctx->n];
+//   create_exps(c, ctx->m, exps);
 
 
-  size_t stride = ctx->n + 1;
+//   size_t stride = ctx->n + 1;
 
-  uint64_t A[(stride)*(stride)];
+//   uint64_t A[(stride)*(stride)];
 
-  build_drop_mat(A, ctx->n, exps, ctx, stride);
+//   build_drop_mat(A, ctx->n, exps, ctx, stride);
 
-  for (size_t i = 0; i < stride; i++)
-  {
-    // A[i * stride + stride -1] = ctx->p-ctx->r;
-    A[i * stride + stride -1] = 0;
+//   for (size_t i = 0; i < stride; i++)
+//   {
+//     // A[i * stride + stride -1] = ctx->p-ctx->r;
+//     A[i * stride + stride -1] = 0;
     
-    A[(stride-1) * stride + i] = ctx->p-ctx->r;
-    // A[(stride-1) * stride + i] = 0;
-    A[i*stride + i] = add_mod_u64(A[i*stride + i], ctx->r, ctx->p); //todo
-  }
+//     A[(stride-1) * stride + i] = ctx->p-ctx->r;
+//     // A[(stride-1) * stride + i] = 0;
+//     A[i*stride + i] = add_mod_u64(A[i*stride + i], ctx->r, ctx->p); //todo
+//   }
 
-  // A[(stride-1)*stride + (stride -1)] = 0;
-  A[(stride-1)*stride + (stride -1)] = add_mod_u64(ctx->nat_M[stride-1], ctx->nat_M[1], ctx->p);
+//   // A[(stride-1)*stride + (stride -1)] = 0;
+//   A[(stride-1)*stride + (stride -1)] = add_mod_u64(ctx->nat_M[stride-1], ctx->nat_M[1], ctx->p);
 
 
-  return det_mod_p(A, stride, ctx);
-}
+//   return det_mod_p(A, stride, ctx);
+// }
 
 static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_term(vec, ctx), jack_offset_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+  return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
   uint64_t ret = jack_offset(vec, ctx);
 
   // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
+  ret = mont_mul(ret, add_mod_u64(ctx->nat_M[ctx->n-1], ctx->nat_M[2], ctx->p), ctx->p, ctx->p_dash);
+
+  // Second divide is due to not computing the extra col in det:
   ret = mont_mul(ret, add_mod_u64(ctx->nat_M[ctx->n-1], ctx->nat_M[2], ctx->p), ctx->p, ctx->p_dash);
 
 
