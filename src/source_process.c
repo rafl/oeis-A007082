@@ -367,10 +367,8 @@ static void *residue_for_prime(void *ud) {
       uint64_t v_rot[m*2];
       memcpy(v_rot, vec, m * sizeof(uint64_t));
       memcpy(v_rot + m, vec, m * sizeof(uint64_t));
-      // uint64_t f_0 = f(vec, ctx);
+      uint64_t f_0 = f(vec, ctx);
       uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
-
-      
 
       // Loop over each "rotation" of the vector of argument multiplicities. This is
       // equivilent to multiplying all the coefficients by w
@@ -379,18 +377,13 @@ static void *residue_for_prime(void *ud) {
         // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
         if (vec[r] == 0) continue;
 
-        // The multinomial coefficient would be constant over all "rotations" of the multiplicities
+        // The multinomial coefficient would be constant over all "rotations" of the multiplicities`
         // but because we're assuming at least one argument is always "1" which requires us to subtract
         // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
         // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
         size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
 
-        // size_t idx = (2*r) % m;
-        // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
-        // This result comes from having to permute one of the ones from one of the first n-1 args into the nth arg
-        // See the paper for more info
-        // uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
-        uint64_t f_n = mont_mul(coeff, f(v_rot+r, ctx), p, ctx->p_dash);
+        uint64_t f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
         l_acc = add_mod_u64(l_acc, f_n, p);
       }
     }
