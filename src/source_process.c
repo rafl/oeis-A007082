@@ -126,7 +126,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
-  uint64_t coeff = ctx->fact_M[ctx->n - 1];
+  uint64_t coeff = ctx->fact_M[ctx->n_args - 1];
   for (size_t i = 0; i < len; ++i)
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i]], p, p_dash);
 
@@ -545,7 +545,7 @@ static size_t get_num_threads() {
 }
 
 static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, uint64_t *p_ret) {
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n_args-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
   uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
   prim_ctx_free(ctx);
 
