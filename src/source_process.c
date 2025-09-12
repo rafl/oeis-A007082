@@ -202,8 +202,6 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     uint64_t sum = ctx->r;
     // for each non zero power of omega w^j in our args
     for (size_t b = 0; b < r; ++b) {
-      // gou
-
       size_t j = typ[b];
 
       // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k)
@@ -646,7 +644,7 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, boo
     m -= 2;
   }
 
-  uint64_t n_args = mode == PROC_MODE_JACK_OFFSET ? n : n-2;
+  uint64_t n_args = (mode == PROC_MODE_JACK_OFFSET) ? n-2 : n;
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
