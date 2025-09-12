@@ -617,12 +617,12 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
   uint64_t (*fn)(uint64_t *, const prim_ctx_t *);
-  // JACK: i think it's just regular f for JACKEST, and the initialisation
+  // JACK: i think it's just regular david for JACKEST, and the initialisation
   //       code in source_process_new will set it up as appropriate?
   switch (st->mode) {
-  case MODE_REG:
-  case MODE_JACKEST: fn = david; break;
-  case MODE_JACKOFF: fn = jack; break;
+  case PROC_MODE_REG:
+  case PROC_MODE_JACKEST: fn = david; break;
+  case PROC_MODE_JACKOFF: fn = jack; break;
   }
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){ .ctx = ctx, .f = fn, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };

@@ -17,13 +17,13 @@
 #endif
 
 const char * const infix[3] = {
-  "", // MODE_REG
-  ".jackoff", // MODE_JACKOFF
-  ".jackest", // MODE_JACKEST
+  "", // PROC_MODE_REG
+  ".jackoff", // PROC_MODE_JACKOFF
+  ".jackest", // PROC_MODE_JACKEST
 };
 
 static void get_snapshot_path(process_mode_t mode, uint64_t n, uint64_t p, char *buf, size_t len) {
-  assert(mode <= MODE_JACKEST);
+  assert(mode <= PROC_MODE_JACKEST);
   snprintf(buf, len, ".%"PRIu64".%"PRIu64"%s.ss", n, p, infix[mode]);
 }
 

@@ -4,9 +4,9 @@
 #include <stdbool.h>
 
 typedef enum {
-  MODE_REG = 0,
-  MODE_JACKOFF = (1 << 0),
-  MODE_JACKEST = (1 << 1),
+  PROC_MODE_REG = 0,
+  PROC_MODE_JACKOFF = (1 << 0),
+  PROC_MODE_JACKEST = (1 << 1),
 //  MODE_JACKBOTH = MODE_JACKOFF|MODE_JACKEST,
 } process_mode_t;
 

@@ -9,6 +9,8 @@
 #include <gmp.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <getopt.h>
+#include <string.h>
 
 typedef enum {
   MODE_NONE = 0,
@@ -28,13 +30,27 @@ static uint64_t parse_uint(const char *s) {
   return n;
 }
 
+static process_mode_t parse_jack(const char *s) {
+  if (strcmp(s, "off") == 0)
+    return PROC_MODE_JACKOFF;
+  if (strcmp(s, "est") == 0)
+    return PROC_MODE_JACKEST;
+  fprintf(stderr, "invalid jack mode %s\n", s);
+  abort();
+}
+
+static struct option long_opts[] = {
+  {"jack", required_argument, NULL, 'j'},
+};
+
 int main (int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
+  process_mode_t proc_mode = PROC_MODE_REG;
   bool quiet = false, snapshot = false;
 
   for (;;) {
-    int c = getopt(argc, argv, "m:pcqs");
+    int c = getopt_long(argc, argv, "m:pcqs", long_opts, NULL);
     if (c == -1) break;
 
     switch (c) {
@@ -43,6 +59,7 @@ int main (int argc, char **argv) {
       case 'c': mode |= MODE_COMBINE; break;
       case 'q': quiet = true; break;
       case 's': snapshot = true; break;
+      case 'j': proc_mode = parse_jack(optarg); break;
     }
   }
   assert(mode < MODE_LAST);
@@ -52,7 +69,7 @@ int main (int argc, char **argv) {
     n = parse_uint(argv[optind]);
 
   source_t *src = (mode & MODE_PROCESS)
-                    ? source_process_new(MODE_REG, n, m_id, quiet, snapshot)
+                    ? source_process_new(proc_mode, n, m_id, quiet, snapshot)
                     : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
