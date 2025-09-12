@@ -24,7 +24,7 @@ SRCS := $(wildcard $(SRC_DIR)/*.c)
 OBJS := $(patsubst $(SRC_DIR)/%.c,$(OBJ_DIR)/%.o,$(SRCS))
 DEPS := $(OBJS:.o=.d)
 
-MAIN_FILES := oeis.c
+MAIN_FILES := oeis.c nnecklaces.c
 MAIN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(MAIN_FILES))
 
 UTIL_OBJS := $(filter-out $(MAIN_OBJS),$(OBJS))
