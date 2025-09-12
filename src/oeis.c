@@ -51,7 +51,9 @@ int main (int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id, quiet, snapshot) : source_stdin_new();
+  source_t *src = (mode & MODE_PROCESS)
+                    ? source_process_new(MODE_REG, n, m_id, quiet, snapshot)
+                    : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
   bool converged = false;
