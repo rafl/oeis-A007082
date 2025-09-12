@@ -663,6 +663,8 @@ static void proc_destroy(source_t *self) {
 source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   // JACK: switch (mode) or whatever here to initialise m, n, n_args, or whatever as appropriate
   uint64_t m = m_for(n);
+  if (mode == PROC_MODE_JACKEST)
+    m -= 2;
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
