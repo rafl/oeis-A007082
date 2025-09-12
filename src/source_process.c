@@ -23,7 +23,7 @@ typedef struct {
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
-  *jk_sums_M, // w^-j*w^k + w^j*w^-k 
+  *jk_sums_M, // w^-j*w^k + w^j*w^-k
   *ws_M, // powers of omega (m form)
   *fact_M, // i! for i <= n
   *fact_inv_M; // 1/i! for i <= n
@@ -60,7 +60,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       jk_pairs_M[jk_pos(j, k, m)] = mont_mul(ctx->ws_M[j], ctx->ws_M[k ? m-k : 0], p, ctx->p_dash);
   }
 
-  // cache of // w^-j*w^k + w^j*w^-k 
+  // cache of // w^-j*w^k + w^j*w^-k
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
   assert(ctx->jk_sums_M);
   for (size_t j = 0; j < m; ++j) {
@@ -145,7 +145,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     // if there was no non-zero cell - det is zero
     if (pivot_i == dim) return 0;
 
-    
+
     if (pivot_i != k) {
       // We swap the rows over so that we have a non zero el on the diagonal
       for (size_t j = 0; j < dim; ++j) {
@@ -218,7 +218,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   }
 
   uint64_t prod_M = ctx->r;
-  
+
   // for each non zero power of omega w^i in our args
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
@@ -256,7 +256,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   for (size_t a = 0; a < r; ++a) {
     // looking t the w^i args
     size_t i = typ[a];
-  
+
     // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
     // uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
 
@@ -364,9 +364,6 @@ static void *residue_for_prime(void *ud) {
       // i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of w^2
       size_t *vec = &vecs[c*m];
 
-      uint64_t v_rot[m*2];
-      memcpy(v_rot, vec, m * sizeof(uint64_t));
-      memcpy(v_rot + m, vec, m * sizeof(uint64_t));
       uint64_t f_0 = f(vec, ctx);
       uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
 
@@ -377,7 +374,7 @@ static void *residue_for_prime(void *ud) {
         // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
         if (vec[r] == 0) continue;
 
-        // The multinomial coefficient would be constant over all "rotations" of the multiplicities`
+        // The multinomial coefficient would be constant over all "rotations" of the multiplicities
         // but because we're assuming at least one argument is always "1" which requires us to subtract
         // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
         // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
@@ -494,9 +491,6 @@ static void proc_destroy(source_t *self) {
 
 source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   uint64_t m = m_for(n);
-  printf("n = %lu\n", n);
-  printf("m = %lu\n", m);
-
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
