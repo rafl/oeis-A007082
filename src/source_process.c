@@ -616,7 +616,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   worker_t w_ctxs[st->n_thrds];
   bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
-  uint64_t (*fn)(uint64_t *, const prim_ctx_t *);
+  uint64_t (*fn)(uint64_t *, const prim_ctx_t *) = 0;
   // JACK: i think it's just regular david for JACKEST, and the initialisation
   //       code in source_process_new will set it up as appropriate?
   switch (st->mode) {

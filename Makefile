@@ -1,4 +1,4 @@
-CFLAGS := -g -std=gnu18 -O0 -march=native -flto -Wall -Wextra \
+CFLAGS := -g -std=gnu18 -O3 -march=native -flto -Wall -Wextra \
           $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
@@ -49,6 +49,7 @@ use:
 optimised:
 	$(MAKE) gen
 	./oeis 17
+	./oeis --jack off 17
 	$(MAKE) use
 
 $(TARGETS): %: $(OBJ_DIR)/%.o $(UTIL_OBJS) | $(PGO_DIR)
