@@ -32,7 +32,7 @@ static uint64_t parse_uint(const char *s) {
 
 static process_mode_t parse_jack(const char *s) {
   if (strcmp(s, "off") == 0)
-    return PROC_MODE_JACKOFF;
+    return PROC_MODE_JACK_OFFSET;
   if (strcmp(s, "est") == 0)
     return PROC_MODE_JACKEST;
   fprintf(stderr, "invalid jack mode %s\n", s);

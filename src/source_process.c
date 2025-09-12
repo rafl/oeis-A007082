@@ -18,7 +18,7 @@ static uint64_t m_for(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, //n = number of veritcies //obvious
+  uint64_t n, n_args, m, p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
@@ -35,10 +35,11 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
 }
 
 // shared over threads - not mutated
-static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
+static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_t p, uint64_t w) {
   prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
   assert(ctx);
   ctx->n = n;
+  ctx->n_args = n_args;
   ctx->m = m;
   ctx->p = p;
   ctx->p_dash = (uint64_t)(-inv64_u64(p));
@@ -298,17 +299,18 @@ static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
   uint64_t ret = mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 
   // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
-  ret = mont_mul(ret, add_mod_u64(ctx->nat_M[ctx->n-1], ctx->nat_M[2], ctx->p), ctx->p, ctx->p_dash);
+  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
 
-  // Second divide is due to not computing the extra col in det:
-  ret = mont_mul(ret, add_mod_u64(ctx->nat_M[ctx->n-1], ctx->nat_M[2], ctx->p), ctx->p, ctx->p_dash);
+  // Second multiply is due to not computing the extra col in det:
+  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
 
   return ret;
 }
 
 static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
   uint64_t const m = ctx->m, p = ctx->p;
-  uint64_t ret = 0, f_0 = jack_offset(vec, ctx);
+  uint64_t ret = 0;
+  uint64_t f_0 = jack_offset(vec, ctx);
   uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
 
   // Loop over each "rotation" of the vector of argument multiplicities. This is
@@ -470,7 +472,10 @@ static uint64_t david(uint64_t *vec, const prim_ctx_t *ctx) {
 // state of whole process (shared over threads)
 typedef struct {
   process_mode_t mode;
-  uint64_t n, /* element of seq */ m, /*w is the mth root of unity*/ *ps /* list of primes */;
+  uint64_t n; /* element of seq */ 
+  uint64_t n_args; //Number of arguments `f` or (or `f_jack_offset`) takes
+  uint64_t m; /*w is the mth root of unity*/ 
+  uint64_t *ps; /* list of primes */
   size_t idx /* withth prime*/, np /* number of primes*/, *vecss /*Some buffers for vectors*/;
   bool quiet, snapshot; /*mode stuff - saving snapshots so you can restart*/
   size_t n_thrds; /*number of threads*/
@@ -561,9 +566,9 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
   // root of unity
   uint64_t w = mth_root_mod_p(p, m);
-  prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+  prim_ctx_t *ctx = prim_ctx_new(n, st->n_args, m, p, w);
 
-  const size_t siz = canon_iter_size(m, n);
+  const size_t siz = canon_iter_size(m, st->n_args);
 
   _Atomic size_t done = 0;
   uint64_t acc = 0;
@@ -578,7 +583,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (done == siz) return ret(st, ctx, acc, res, p_ret);
 
   // shared work queue
-  queue_t *q = queue_new(n, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
+  queue_t *q = queue_new(st->n_args, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
 
   progress_t prog;
   // progress bar stuff
@@ -596,7 +601,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   switch (st->mode) {
   case PROC_MODE_REG:
   case PROC_MODE_JACKEST: fn = david; break;
-  case PROC_MODE_JACKOFF: fn = jack; break;
+  case PROC_MODE_JACK_OFFSET: fn = jack; break;
   }
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){ .ctx = ctx, .f = fn, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
@@ -635,10 +640,13 @@ static void proc_destroy(source_t *self) {
 #define P_STRIDE (1ULL << 10)
 
 source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
-  // JACK: switch (mode) or whatever here to initialise m, n, n_args, or whatever as appropriate
   uint64_t m = m_for(n);
-  if (mode == PROC_MODE_JACKEST)
+  if (mode == PROC_MODE_JACKEST || mode == PROC_MODE_JACK_OFFSET) {
+    assert ("jack modes are only valid when n%4 == 3" && (n % 4 == 3)); 
     m -= 2;
+  }
+
+  uint64_t n_args = mode == PROC_MODE_JACK_OFFSET ? n : n-2;
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
@@ -648,7 +656,7 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, boo
   size_t n_thrds = get_num_threads();
   size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
   assert(vecss);
-  *st = (proc_state_t){ .mode = mode, .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
+  *st = (proc_state_t){ .mode = mode, .n = n, .n_args=n_args, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
 
   source_t *src = malloc(sizeof *src);
   assert(src);

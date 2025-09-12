@@ -18,7 +18,7 @@
 
 const char * const infix[3] = {
   "", // PROC_MODE_REG
-  ".jackoff", // PROC_MODE_JACKOFF
+  ".jackoffset", // PROC_MODE_JACK_OFFSET
   ".jackest", // PROC_MODE_JACKEST
 };
 
