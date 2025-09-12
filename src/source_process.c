@@ -176,32 +176,6 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
-static uint64_t jack_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
-  const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t acc = ctx->r;
-
-  for (size_t a = 0; a < m; ++a) {
-    uint64_t ca = c[a];
-    if (ca >= 2) {
-      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
-      uint64_t e = (ca*(ca-1)) / 2;
-      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
-    }
-  }
-
-  for (size_t a = 0; a < m; ++a) {
-    uint64_t ca = c[a];
-    if (!ca) continue;
-    for (size_t b = a+1; b < m; ++b) {
-      uint64_t cb = c[b];
-      if (!cb) continue;
-      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
-    }
-  }
-
-  return acc;
-}
-
 static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
@@ -294,8 +268,34 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 
+static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
+  const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
+  uint64_t acc = ctx->r;
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = c[a];
+    if (ca >= 2) {
+      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
+      uint64_t e = (ca*(ca-1)) / 2;
+      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
+    }
+  }
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = c[a];
+    if (!ca) continue;
+    for (size_t b = a+1; b < m; ++b) {
+      uint64_t cb = c[b];
+      if (!cb) continue;
+      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
+    }
+  }
+
+  return acc;
+}
+
 static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
-  uint64_t ret = mont_mul(jack_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+  uint64_t ret = mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 
   // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
   ret = mont_mul(ret, add_mod_u64(ctx->nat_M[ctx->n-1], ctx->nat_M[2], ctx->p), ctx->p, ctx->p_dash);
@@ -328,32 +328,6 @@ static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
   }
 
   return ret;
-}
-
-static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
-  const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t acc = ctx->r;
-
-  for (size_t a = 0; a < m; ++a) {
-    uint64_t ca = c[a];
-    if (ca >= 2) {
-      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
-      uint64_t e = (ca*(ca-1)) / 2;
-      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
-    }
-  }
-
-  for (size_t a = 0; a < m; ++a) {
-    uint64_t ca = c[a];
-    if (!ca) continue;
-    for (size_t b = a+1; b < m; ++b) {
-      uint64_t cb = c[b];
-      if (!cb) continue;
-      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
-    }
-  }
-
-  return acc;
 }
 
 static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
