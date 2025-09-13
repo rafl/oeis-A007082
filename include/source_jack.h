@@ -4,4 +4,4 @@
 #include "source_process.h"
 #include <stdbool.h>
 
-source_t *source_jack_new(process_mode_t, uint64_t, uint64_t, bool, bool);
+source_t *source_jack_new(process_mode_t, uint64_t, uint64_t, bool, bool, size_t *);

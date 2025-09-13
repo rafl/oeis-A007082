@@ -71,12 +71,12 @@ int main (int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool) = source_process_new;
+  source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool, size_t *) = source_process_new;
   if (proc_mode == PROC_MODE_JACKBOTH)
     newproc = source_jack_new;
 
   source_t *src = (mode & MODE_PROCESS)
-                    ? newproc(proc_mode, n, m_id, quiet, snapshot)
+                    ? newproc(proc_mode, n, m_id, quiet, snapshot, NULL)
                     : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 

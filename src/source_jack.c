@@ -33,10 +33,10 @@ static void proc_destroy(source_t *self) {
   free(self);
 }
 
-source_t *source_jack_new(process_mode_t, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
-  // TODO: make them share vecss as we only need one at a time
-  source_t *off = source_process_new(PROC_MODE_JACK_OFFSET, n, m_id, quiet, snapshot);
-  source_t *est = source_process_new(PROC_MODE_JACKEST, n, m_id, quiet, snapshot);
+source_t *source_jack_new(process_mode_t, uint64_t n, uint64_t m_id, bool quiet, bool snapshot, size_t *vecss) {
+  assert(!vecss);
+  source_t *off = source_process_new(PROC_MODE_JACK_OFFSET, n, m_id, quiet, snapshot, NULL);
+  source_t *est = source_process_new(PROC_MODE_JACKEST, n, m_id, quiet, snapshot, source_process_vecss(off));
 
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);

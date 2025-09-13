@@ -475,7 +475,7 @@ typedef struct {
   uint64_t m; /*w is the mth root of unity*/ 
   uint64_t *ps; /* list of primes */
   size_t idx /* withth prime*/, np /* number of primes*/, *vecss /*Some buffers for vectors*/;
-  bool quiet, snapshot; /*mode stuff - saving snapshots so you can restart*/
+  bool quiet, snapshot, borrowed; /*mode stuff - saving snapshots so you can restart*/
   size_t n_thrds; /*number of threads*/
 } proc_state_t;
 
@@ -627,9 +627,15 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   return ret(st, ctx, acc, res, p_ret);
 }
 
+size_t *source_process_vecss(source_t *self) {
+  proc_state_t *st = self->state;
+  return st->vecss;
+}
+
 static void proc_destroy(source_t *self) {
   proc_state_t *st = self->state;
-  free(st->vecss);
+  if (!st->borrowed)
+    free(st->vecss);
   free(st->ps);
   free(st);
   free(self);
@@ -637,7 +643,7 @@ static void proc_destroy(source_t *self) {
 
 #define P_STRIDE (1ULL << 10)
 
-source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
+source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot, size_t *vecss) {
   uint64_t m = m_for(n);
   assert(mode <= PROC_MODE_JACKEST);
   if (mode == PROC_MODE_JACKEST || mode == PROC_MODE_JACK_OFFSET) {
@@ -653,9 +659,12 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, boo
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
-  size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
-  assert(vecss);
-  *st = (proc_state_t){ .mode = mode, .n = n, .n_args=n_args, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
+  bool borrowed = vecss;
+  if (!vecss) {
+    vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
+    assert(vecss);
+  }
+  *st = (proc_state_t){ .mode = mode, .n = n, .n_args=n_args, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss, .borrowed = borrowed };
 
   source_t *src = malloc(sizeof *src);
   assert(src);
