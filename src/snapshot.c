@@ -1,3 +1,4 @@
+#include "debug.h"
 #include "snapshot.h"
 #include "maths.h"
 
@@ -15,13 +16,20 @@
 #  define _CLOCK CLOCK_MONOTONIC
 #endif
 
-static void get_snapshot_path(uint64_t n, uint64_t p, char *buf, size_t len) {
-  snprintf(buf, len, ".%"PRIu64".%"PRIu64".ss", n, p);
+const char * const infix[3] = {
+  "", // PROC_MODE_REG
+  ".jackoffset", // PROC_MODE_JACK_OFFSET
+  ".jackest", // PROC_MODE_JACKEST
+};
+
+static void get_snapshot_path(process_mode_t mode, uint64_t n, uint64_t p, char *buf, size_t len) {
+  assert(mode <= PROC_MODE_JACKEST);
+  snprintf(buf, len, ".%"PRIu64".%"PRIu64"%s.ss", n, p, infix[mode]);
 }
 
 static void snapshot_save(snapshot_st_t *st, size_t idx) {
-  char path[PATH_MAX], tmp[PATH_MAX];
-  get_snapshot_path(st->n, st->p, path, sizeof(path));
+  char path[PATH_MAX-4], tmp[PATH_MAX];
+  get_snapshot_path(st->mode, st->n, st->p, path, sizeof(path));
   snprintf(tmp, sizeof(tmp), "%s.tmp", path);
 
   int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -88,9 +96,9 @@ static void *snapshot(void *ud) {
   return NULL;
 }
 
-void snapshot_start(snapshot_t *ss, uint64_t n, uint64_t p, size_t n_thrds, queue_t *q, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
+void snapshot_start(snapshot_t *ss, process_mode_t mode, uint64_t n, uint64_t p, size_t n_thrds, queue_t *q, bool **paused, _Atomic size_t *idx, uint64_t *acc) {
   snapshot_st_t *st = &ss->st;
-  *st = (snapshot_st_t){ .n = n, .p = p, .n_thrds = n_thrds, .q = q, .paused = paused, .idx = idx, .acc = acc };
+  *st = (snapshot_st_t){ .mode = mode, .n = n, .p = p, .n_thrds = n_thrds, .q = q, .paused = paused, .idx = idx, .acc = acc };
   pthread_mutex_init(&st->mu, NULL);
   pthread_condattr_t ca;
   pthread_condattr_init(&ca);
@@ -115,9 +123,9 @@ void snapshot_stop(snapshot_t *restrict ss) {
   pthread_mutex_destroy(&st->mu);
 }
 
-void snapshot_try_resume(uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc, void *iter_st, size_t *st_len) {
+void snapshot_try_resume(process_mode_t mode, uint64_t n, uint64_t p, _Atomic size_t *done, uint64_t *acc, void *iter_st, size_t *st_len) {
   char path[PATH_MAX];
-  get_snapshot_path(n, p, path, sizeof(path));
+  get_snapshot_path(mode, n, p, path, sizeof(path));
   *st_len = 0;
   FILE *f = fopen(path, "r");
   if (!f) {

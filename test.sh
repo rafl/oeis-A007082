@@ -12,7 +12,9 @@ while read -r idx val; do
   VAL[idx]=$val
 done < "$BFILE"
 
-for (( n = 1; n <= MAX_N; n++ )); do
+function run_test() {
+  n="$1"
+  args="$2"
   k=$(( 2*n + 1 ))
   expected="${VAL[n]:-}"
 
@@ -22,13 +24,29 @@ for (( n = 1; n <= MAX_N; n++ )); do
     continue
   fi
 
-  got="$(./oeis -q "$k")"
+  start=$(date +%s.%N)
+  got="$(./oeis -q $args "$k")"
+  end=$(date +%s.%N)
+
+  dur=$(awk -v s="$start" -v e="$end" 'BEGIN {printf "%.3f", (e-s)}')
+
+  extra=""
+  if [ -n "$args" ]; then
+    extra="($args) "
+  fi
 
   if [[ "$got" != "$expected" ]]; then
-    printf '❌  n=%d (k=%d): expected %s, got %s\n' "$n" "$k" "$expected" "$got"
+    printf '❌  n=%d %s(k=%d): expected %s, got %s [%.3fs]\n' "$n" "$extra" "$k" "$expected" "$got" "$dur"
     fail=1
   else
-    printf '✅  n=%d OK\n' "$n"
+    printf '✅  n=%d %sOK [%.3fs]\n' "$n" "$extra" "$dur"
+  fi
+}
+
+for (( n = 1; n <= MAX_N; n++ )); do
+  run_test "$n" ""
+  if (( $n > 1 && $n % 2 )); then
+    run_test "$n" "--jack both"
   fi
 done
 

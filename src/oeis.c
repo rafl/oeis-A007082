@@ -3,12 +3,15 @@
 #include "combine.h"
 #include "source_combine.h"
 #include "source_process.h"
+#include "source_jack.h"
 
 #include <stdio.h>
 #include <inttypes.h>
 #include <gmp.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <getopt.h>
+#include <string.h>
 
 typedef enum {
   MODE_NONE = 0,
@@ -28,13 +31,29 @@ static uint64_t parse_uint(const char *s) {
   return n;
 }
 
+static process_mode_t parse_jack(const char *s) {
+  if (strcmp(s, "offset") == 0)
+    return PROC_MODE_JACK_OFFSET;
+  if (strcmp(s, "est") == 0)
+    return PROC_MODE_JACKEST;
+  if (strcmp(s, "both") == 0)
+    return PROC_MODE_JACKBOTH;
+  fprintf(stderr, "invalid jack mode %s\n", s);
+  abort();
+}
+
+static struct option long_opts[] = {
+  {"jack", required_argument, NULL, 'j'},
+};
+
 int main (int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
+  process_mode_t proc_mode = PROC_MODE_REG;
   bool quiet = false, snapshot = false;
 
   for (;;) {
-    int c = getopt(argc, argv, "m:pcqs");
+    int c = getopt_long(argc, argv, "m:pcqs", long_opts, NULL);
     if (c == -1) break;
 
     switch (c) {
@@ -43,6 +62,7 @@ int main (int argc, char **argv) {
       case 'c': mode |= MODE_COMBINE; break;
       case 'q': quiet = true; break;
       case 's': snapshot = true; break;
+      case 'j': proc_mode = parse_jack(optarg); break;
     }
   }
   assert(mode < MODE_LAST);
@@ -51,7 +71,13 @@ int main (int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  source_t *src = (mode & MODE_PROCESS) ? source_process_new(n, m_id, quiet, snapshot) : source_stdin_new();
+  source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool) = source_process_new;
+  if (proc_mode == PROC_MODE_JACKBOTH)
+    newproc = source_jack_new;
+
+  source_t *src = (mode & MODE_PROCESS)
+                    ? newproc(proc_mode, n, m_id, quiet, snapshot)
+                    : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
   bool converged = false;

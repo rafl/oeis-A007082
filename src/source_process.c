@@ -18,12 +18,12 @@ static uint64_t m_for(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, m, p, //n = number of veritcies //obvious
+  uint64_t n, n_args, m, p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
-  *jk_sums_M, // w^-j*w^k + w^j*w^-k 
+  *jk_sums_M, // w^-j*w^k + w^j*w^-k
   *ws_M, // powers of omega (m form)
   *fact_M, // i! for i <= n
   *fact_inv_M; // 1/i! for i <= n
@@ -35,10 +35,11 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
 }
 
 // shared over threads - not mutated
-static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) {
+static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_t p, uint64_t w) {
   prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
   assert(ctx);
   ctx->n = n;
+  ctx->n_args = n_args;
   ctx->m = m;
   ctx->p = p;
   ctx->p_dash = (uint64_t)(-inv64_u64(p));
@@ -60,7 +61,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t m, uint64_t p, uint64_t w) 
       jk_pairs_M[jk_pos(j, k, m)] = mont_mul(ctx->ws_M[j], ctx->ws_M[k ? m-k : 0], p, ctx->p_dash);
   }
 
-  // cache of // w^-j*w^k + w^j*w^-k 
+  // cache of // w^-j*w^k + w^j*w^-k
   ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
   assert(ctx->jk_sums_M);
   for (size_t j = 0; j < m; ++j) {
@@ -125,7 +126,7 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
 static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms, size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
-  uint64_t coeff = ctx->fact_M[ctx->n - 1];
+  uint64_t coeff = ctx->fact_M[ctx->n_args - 1];
   for (size_t i = 0; i < len; ++i)
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i]], p, p_dash);
 
@@ -145,7 +146,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     // if there was no non-zero cell - det is zero
     if (pivot_i == dim) return 0;
 
-    
+
     if (pivot_i != k) {
       // We swap the rows over so that we have a non zero el on the diagonal
       for (size_t j = 0; j < dim; ++j) {
@@ -176,7 +177,97 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r, p, p_dash), p, p_dash);
 }
 
-static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
+static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  // active groups
+  // This is the indexs of the non zero elements of c
+  // Which is also the powers of w they correspond to
+  // typ for "type" aka class / colour
+  size_t typ[m], r = 0;
+  for (size_t i = 0; i < m; ++i) {
+    if (c[i]) {
+      typ[r] = i;
+      ++r;
+    }
+  }
+
+  uint64_t prod_M = ctx->r;
+
+  // for each non zero power of omega w^i in our args
+  for (size_t a = 0; a < r; ++a) {
+    size_t i = typ[a];
+
+    // Jack wants to add 1 to the diagonal
+    uint64_t sum = ctx->r;
+    // for each non zero power of omega w^j in our args
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+
+      // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      //sum is gunna be our diagonal element for this row / the row sum
+      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
+    }
+
+    // so prod m is the product of the row sums of the rows we're deleting
+    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+  }
+
+  // we divide prod_M by the multiplicty of 1 because... ?
+  // Probably something to do with us not dropping one of the ones or sth?
+  // I'll try taking it out
+  // prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+
+  // If all terms were the same power of w and we quotiented everything out
+  if (r == 1)
+    return prod_M;
+
+  // We're constructing the minor of the reduced matrix
+  uint64_t A[r*r];
+  for (size_t a = 0; a < r; ++a) {
+    // looking t the w^i args
+    size_t i = typ[a];
+
+    // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
+    // uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+
+    // we're taking the multiplicity of 1 * this term
+    // Jack wants this to start at 1 again
+    uint64_t diag = ctx->r; //mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
+
+    // remaining off-diagonal blocks
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+      // going over w^j args
+
+      if (j == i)
+        continue;
+
+      // we're we're treading the 1 term as special... yeah ok I guess it's because it doesn't go in the matrix?
+      // so this is the new "w del"
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+
+      // Again fill the matrix as per it's normal terms but with multiplicity
+      uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
+
+      // This is the -1 coefficient on the off diag elements
+      A[(a)*r + (b)] = p - v;
+      // and add it to the total for the diag elements
+      diag = add_mod_u64(diag, v, p);
+    }
+
+    A[(a)*r + (a)] = diag;
+  }
+
+  // I guess prod_M is some magic compensation coefficient
+  uint64_t ret = mont_mul(prod_M, det_mod_p(A, r, ctx), p, ctx->p_dash);
+  return ret;
+}
+
+
+static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
   uint64_t acc = ctx->r;
 
@@ -202,6 +293,43 @@ static uint64_t f_fst_term(uint64_t *c, const prim_ctx_t *ctx) {
   return acc;
 }
 
+static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
+  uint64_t ret = mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+
+  // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
+  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
+
+  // Second multiply is due to not computing the extra col in det:
+  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
+
+  return ret;
+}
+
+static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
+  uint64_t const m = ctx->m, p = ctx->p;
+  uint64_t ret = 0;
+  uint64_t f_0 = jack_offset(vec, ctx);
+  uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+
+  // Loop over each "rotation" of the vector of argument multiplicities. This is
+  // equivilent to multiplying all the coefficients by w
+  for (size_t r = 0; r < m; ++r) {
+    // We require there always be at least one "1" in the arguments to f() (per the paper)
+    // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
+    if (vec[r] == 0) continue;
+
+    // The multinomial coefficient would be constant over all "rotations" of the multiplicities
+    // but because we're assuming at least one argument is always "1" which requires us to subtract
+    // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
+    // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
+    size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+    uint64_t f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
+    ret = add_mod_u64(ret, f_n, p);
+  }
+
+  return ret;
+}
+
 static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
@@ -218,7 +346,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   }
 
   uint64_t prod_M = ctx->r;
-  
+
   // for each non zero power of omega w^i in our args
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
@@ -246,7 +374,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
     prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
 
-    // prod_M - product over each deleted row / col (we're leaving 1 behind) 
+    // prod_M - product over each deleted row / col (we're leaving 1 behind)
     // of the sum over l of B_kl
     // So like for each column we "delete" we multiply by the column sum...
   }
@@ -306,18 +434,53 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_term(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+   return mont_mul(f_fst_trm(vec, ctx), f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
+}
+
+static uint64_t david(uint64_t *vec, const prim_ctx_t *ctx) {
+  uint64_t const m = ctx->m, p = ctx->p;
+  uint64_t ret = 0, f_0 = f(vec, ctx);
+  uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+
+  // Loop over each "rotation" of the vector of argument multiplicities. This is
+  // equivilent to multiplying all the coefficients by w
+  for (size_t r = 0; r < m; ++r) {
+    // We require there always be at least one "1" in the arguments to f() (per the paper)
+    // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
+    if (vec[r] == 0) continue;
+
+    // The multinomial coefficient would be constant over all "rotations" of the multiplicities
+    // but because we're assuming at least one argument is always "1" which requires us to subtract
+    // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
+    // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
+    size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+
+    size_t idx = (2*r) % m;
+    // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
+    // This result comes from having to permute one of the ones from one of the first n-1 args into the nth arg
+    // See the paper for more info
+    uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
+
+    ret = add_mod_u64(ret, f_n, p);
+  }
+
+  return ret;
 }
 
 // state of whole process (shared over threads)
 typedef struct {
-  uint64_t n, /* element of seq */ m, /*w is the mth root of unity*/ *ps /* list of primes */;
+  process_mode_t mode;
+  uint64_t n; /* element of seq */ 
+  uint64_t n_args; //Number of arguments `f` or (or `f_jack_offset`) takes
+  uint64_t m; /*w is the mth root of unity*/ 
+  uint64_t *ps; /* list of primes */
   size_t idx /* withth prime*/, np /* number of primes*/, *vecss /*Some buffers for vectors*/;
   bool quiet, snapshot; /*mode stuff - saving snapshots so you can restart*/
   size_t n_thrds; /*number of threads*/
 } proc_state_t;
 
 typedef struct {
+  uint64_t (*f)(uint64_t *, const prim_ctx_t *);
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
   queue_t *q;
@@ -345,6 +508,7 @@ static resume_cb_t w_idle(void *ud) {
 // thread function for doing work on the "maths stuff"
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
+  uint64_t (*f)(uint64_t *, const prim_ctx_t *) = worker->f;
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t m = ctx->m, p = ctx->p, l_acc = 0; // l_acc is where we're going to accumulate the total residual from the stuff we pull from our work queue
   size_t *vecs = worker->vecs;
@@ -358,30 +522,7 @@ static void *residue_for_prime(void *ud) {
       // each vector has len m
       // each vector contains the multiplicity with which each power of omega appears in the args
       // i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of w^2
-      size_t *vec = &vecs[c*m];
-      uint64_t f_0 = f(vec, ctx);
-      uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
-
-      // Loop over each "rotation" of the vector of argument multiplicities. This is
-      // equivilent to multiplying all the coefficients by w
-      for (size_t r = 0; r < m; ++r) {
-        // We require there always be at least one "1" in the arguments to f() (per the paper)
-        // that is to say if the multiplicty of "1" arguments is zero - we should skip this case
-        if (vec[r] == 0) continue;
-
-        // The multinomial coefficient would be constant over all "rotations" of the multiplicities
-        // but because we're assuming at least one argument is always "1" which requires us to subtract
-        // 1 from the first multiplicity. Rather than recompute the full coeff each time we can take a
-        // baseline "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
-        size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
-
-        size_t idx = (2*r) % m;
-        // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
-        // This result comes from having to permute one of the ones from one of the first n-1 args into the nth arg
-        // See the paper for more info
-        uint64_t f_n = mont_mul(coeff, mont_mul(f_0, ctx->ws_M[idx ? m-idx : 0], p, ctx->p_dash), p, ctx->p_dash);
-        l_acc = add_mod_u64(l_acc, f_n, p);
-      }
+      l_acc = add_mod_u64(l_acc, f(&vecs[c*m], ctx), p);
     }
     atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
   }
@@ -404,7 +545,7 @@ static size_t get_num_threads() {
 }
 
 static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, uint64_t *p_ret) {
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n_args-1, ctx->r, ctx->p, ctx->p_dash), ctx->r, ctx->p, ctx->p_dash);
   uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
   prim_ctx_free(ctx);
 
@@ -423,9 +564,9 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
   // root of unity
   uint64_t w = mth_root_mod_p(p, m);
-  prim_ctx_t *ctx = prim_ctx_new(n, m, p, w);
+  prim_ctx_t *ctx = prim_ctx_new(n, st->n_args, m, p, w);
 
-  const size_t siz = canon_iter_size(m, n);
+  const size_t siz = canon_iter_size(m, st->n_args);
 
   _Atomic size_t done = 0;
   uint64_t acc = 0;
@@ -434,13 +575,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   size_t st_len = 0;
 
   if (st->snapshot)
-    snapshot_try_resume(n, p, &done, &acc, iter_st, &st_len);
+    snapshot_try_resume(st->mode, n, p, &done, &acc, iter_st, &st_len);
   assert(done <= siz);
 
   if (done == siz) return ret(st, ctx, acc, res, p_ret);
 
   // shared work queue
-  queue_t *q = queue_new(n, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
+  queue_t *q = queue_new(st->n_args, m, iter_st, st_len, &st->vecss[st->n_thrds*CHUNK*m]);
 
   progress_t prog;
   // progress bar stuff
@@ -452,8 +593,16 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   worker_t w_ctxs[st->n_thrds];
   bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
+  uint64_t (*fn)(uint64_t *, const prim_ctx_t *) = 0;
+  // JACK: i think it's just regular david for JACKEST, and the initialisation
+  //       code in source_process_new will set it up as appropriate?
+  switch (st->mode) {
+  case PROC_MODE_REG:
+  case PROC_MODE_JACKEST: fn = david; break;
+  case PROC_MODE_JACK_OFFSET: fn = jack; break;
+  }
   for (size_t i = 0; i < st->n_thrds; ++i) {
-    w_ctxs[i] = (worker_t){ .ctx = ctx, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
+    w_ctxs[i] = (worker_t){ .ctx = ctx, .f = fn, .done = &done, .q = q, .vecs = &st->vecss[i*CHUNK*m], .idle = false, .acc = &acc, .acc_mu = &acc_mu };
     idles[i] = &w_ctxs[i].idle;
     // worker threads
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
@@ -461,7 +610,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   snapshot_t ss;
   if (st->snapshot)
-    snapshot_start(&ss, n, p, st->n_thrds, q, idles, &done, &acc);
+    snapshot_start(&ss, st->mode, n, p, st->n_thrds, q, idles, &done, &acc);
 
   queue_fill(q);
 
@@ -488,8 +637,15 @@ static void proc_destroy(source_t *self) {
 
 #define P_STRIDE (1ULL << 10)
 
-source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
+source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   uint64_t m = m_for(n);
+  assert(mode <= PROC_MODE_JACKEST);
+  if (mode == PROC_MODE_JACKEST || mode == PROC_MODE_JACK_OFFSET) {
+    assert ("jack modes are only valid when n%4 == 3 && n > 3" && (n > 3 && n % 4 == 3));
+    m -= 2;
+  }
+
+  uint64_t n_args = (mode == PROC_MODE_JACK_OFFSET) ? n-2 : n;
   size_t np;
   assert(m_id < P_STRIDE);
   uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
@@ -499,7 +655,7 @@ source_t *source_process_new(uint64_t n, uint64_t m_id, bool quiet, bool snapsho
   size_t n_thrds = get_num_threads();
   size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
   assert(vecss);
-  *st = (proc_state_t){ .n = n, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
+  *st = (proc_state_t){ .mode = mode, .n = n, .n_args=n_args, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
 
   source_t *src = malloc(sizeof *src);
   assert(src);
