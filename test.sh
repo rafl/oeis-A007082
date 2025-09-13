@@ -24,7 +24,11 @@ function run_test() {
     continue
   fi
 
+  start=$(date +%s.%N)
   got="$(./oeis -q $args "$k")"
+  end=$(date +%s.%N)
+
+  dur=$(awk -v s="$start" -v e="$end" 'BEGIN {printf "%.3f", (e-s)}')
 
   extra=""
   if [ -n "$args" ]; then
@@ -32,10 +36,10 @@ function run_test() {
   fi
 
   if [[ "$got" != "$expected" ]]; then
-    printf '❌  n=%d %s(k=%d): expected %s, got %s\n' "$n" "$extra" "$k" "$expected" "$got"
+    printf '❌  n=%d %s(k=%d): expected %s, got %s [%.3fs]\n' "$n" "$extra" "$k" "$expected" "$got" "$dur"
     fail=1
   else
-    printf '✅  n=%d %sOK\n' "$n" "$extra"
+    printf '✅  n=%d %sOK [%.3fs]\n' "$n" "$extra" "$dur"
   fi
 }
 
