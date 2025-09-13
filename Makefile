@@ -49,7 +49,7 @@ use:
 optimised:
 	$(MAKE) gen
 	./oeis 17
-	./oeis --jack off 17
+	./oeis --jack offset 17
 	$(MAKE) use
 
 $(TARGETS): %: $(OBJ_DIR)/%.o $(UTIL_OBJS) | $(PGO_DIR)
