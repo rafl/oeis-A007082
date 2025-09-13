@@ -7,7 +7,7 @@ typedef enum {
   PROC_MODE_REG = 0,
   PROC_MODE_JACK_OFFSET = (1 << 0),
   PROC_MODE_JACKEST = (1 << 1),
-//  MODE_JACKBOTH = MODE_JACK_OFFSET|MODE_JACKEST,
+  PROC_MODE_JACKBOTH = PROC_MODE_JACK_OFFSET|PROC_MODE_JACKEST,
 } process_mode_t;
 
 source_t *source_process_new(process_mode_t, uint64_t, uint64_t, bool, bool);

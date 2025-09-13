@@ -639,6 +639,7 @@ static void proc_destroy(source_t *self) {
 
 source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
   uint64_t m = m_for(n);
+  assert(mode <= PROC_MODE_JACKEST);
   if (mode == PROC_MODE_JACKEST || mode == PROC_MODE_JACK_OFFSET) {
     assert ("jack modes are only valid when n%4 == 3" && (n % 4 == 3)); 
     m -= 2;
