@@ -294,15 +294,7 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
-  uint64_t ret = mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
-
-  // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
-  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
-
-  // Second multiply is due to not computing the extra col in det:
-  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
-
-  return ret;
+  return mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
@@ -327,7 +319,10 @@ static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
     ret = add_mod_u64(ret, f_n, p);
   }
 
-  return ret;
+  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
+
+  // Second multiply is due to not computing the extra col in det:
+  return mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
 }
 
 static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
