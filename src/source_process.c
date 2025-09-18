@@ -231,11 +231,11 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     size_t i = typ[a];
 
     // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
-    // uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+    // uint64_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
 
     // we're taking the multiplicity of 1 * this term
     // Jack wants this to start at 1 again
-    uint64_t diag = ctx->r; //mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
+    uint64_t diag = ctx->r; //mont_mul(ctx->nat_M[c[0]], W_del, p, ctx->p_dash);
 
     // remaining off-diagonal blocks
     for (size_t b = 0; b < r; ++b) {
@@ -333,10 +333,9 @@ static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
 static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
-  // active groups
-  // This is the indexs of the non zero elements of c
+  // active groups typ for "type" aka class / colour
+  // This is the indexes of the non zero elements of c
   // Which is also the powers of w they correspond to
-  // typ for "type" aka class / colour
   size_t typ[m], r = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
@@ -347,78 +346,67 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
   uint64_t prod_M = ctx->r;
 
-  // for each non zero power of omega w^i in our args
+  // for each i where w^i has non zero multiplicity in our args
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
 
-    // This is basically the column sum
+    // This is similar to row sum of tje off diagonal term in the full matrix
+    // The off diagonal term would have one subtracted from multiplicity when j = i (as there's no edge E_ii)
     uint64_t sum = 0;
-    // for each non zero power of omega w^j in our args
+
+    // for each j where w^j has non zero multiplicity in our args
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
-      // w^i*w^-j
-      // (n.b. we could distribute over w^i here if we wanted)
+
 
       // This is the inner element of A matrix from the paper (up to sign) / inner element of product sum in paper
-      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
-      // sum += w * multiplicity of (w^j)
-      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
-
-      // let B_jk = w^j*w^-k / (w^-j*w^k + w^j*w^-k)
-      // reorder args to f such they increase in order of power of omega
-      // Then we have (x_0, x_1, x_2...)
-      // Let B_kl = x_k*x_l^-1 / (.....)
-      // then sum(k) = sum over l of B_kl
+      // sum += W * multiplicity of (w^j)
+      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash), p);
     }
 
+    // prod_M then is the multiple of all these row sums to the power of multiplicity-1
+    // i.e. the product for the row sum for each deleted row
     prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
-
-    // prod_M - product over each deleted row / col (we're leaving 1 behind)
-    // of the sum over l of B_kl
-    // So like for each column we "delete" we multiply by the column sum...
   }
 
-  // #### Up to here prod_M is the same
-  // Prod M = product[a = 0->r-1] sum[b = 0->1-r] w^coeff_cnt[a] * w^-coeff_cnt[b]
-
-  // #### And here is the point is diverges
+  // Now we divide prod_M by the multiplicity of 1 because???
+  // I assume it has to do with the fact that's the col dropped in our minor
   prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
 
-  // Put this isn't the only difference
-
-
-  // We divide by the multiplicty of 1??
-
-  // quotient minor
+  // the dimension (width/height) of the minor is 1 less than dim of quotient matrix
   size_t dim = r - 1;
+
   // If all terms were the same power of w and we quotiented everything out
   if (!dim)
     return prod_M;
 
-  // We're constructing the minor of the reduced matrix
-  // dropping the first row / col
+  // We're constructing the minor of the quotiented matrix
+  // first row / col is the one being dropped the one corresponding to the w^0 = 1 argument
+
   uint64_t A[dim*dim];
+  // for each i!=0 where w^i has non zero multiplicity in our args
   for (size_t a = 1; a < r; ++a) {
     size_t i = typ[a];
 
-    // contribution from the deleted block?????
-    uint64_t w_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+    // contribution from the column removed to form the minor (that's a consant 1 - so w^0 )
+    uint64_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
 
     // When making the "laplaican" the diagonal is the sum of all off-diagonal elements in the row of the full matrix
-    // including the column dropped to form the minor. So we special add that to the diag here (with multiplicity)
-    uint64_t diag = mont_mul(ctx->nat_M[c[0]], w_del, p, ctx->p_dash);
+    // including the column dropped to form the minor. So we add that to the diag here (with multiplicity)
+    uint64_t diag = mont_mul(ctx->nat_M[c[0]], W_del, p, ctx->p_dash);
 
-    // remaining off-diagonal blocks
+    // for each j !=0 where w^j has non zero multiplicity in our args
     for (size_t b = 1; b < r; ++b) {
       size_t j = typ[b];
       if (j == i)
         continue;
 
-      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
-      // Again fill the matrix as per it's normal terms but with multiplicity
-      uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
+      // Again fill the matrix as per it's normal terms but with multiplicity of j
+      uint64_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
 
       // This is the -1 coefficient on the off diag elements
       A[(a-1)*dim + (b-1)] = p - v;
