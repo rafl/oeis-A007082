@@ -144,9 +144,11 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     // If the cell on the diagonal we're about to pivot off is zero - find the next row with a non zero entry in that col
     while (pivot_i < dim && A[pivot_i*dim + k] == 0) ++pivot_i;
     // if there was no non-zero cell - det is zero
+
+    // This is unreachable except in the JackApprox case
     if (pivot_i == dim) return 0;
 
-
+    // We think this happens almost never
     if (pivot_i != k) {
       // We swap the rows over so that we have a non zero el on the diagonal
       for (size_t j = 0; j < dim; ++j) {
@@ -287,7 +289,7 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     for (size_t b = a+1; b < m; ++b) {
       uint64_t cb = c[b];
       if (!cb) continue;
-      // Try cache lookup?
+      // Try cache lookup? Mabye CA and CB and then mul them?
       acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
     }
   }
@@ -408,9 +410,13 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
       uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // Again fill the matrix as per it's normal terms but with multiplicity of j
+
+      // Could do a lookup here
       uint64_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
 
       // This is the -1 coefficient on the off diag elements
+
+      // We could flip the sign here to avoid some subtractions...
       A[(a-1)*dim + (b-1)] = p - v;
       // and add it to the total for the diag elements
       diag = add_mod_u64(diag, v, p);
