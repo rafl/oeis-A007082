@@ -31,7 +31,8 @@ typedef struct {
 
 // index into rectangular array
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
-  return j*m + k;
+  int64_t result = k-j;
+  return result >= 0 ? result : result + m;
 }
 
 // shared over threads - not mutated
@@ -62,24 +63,23 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   }
 
   // cache of // w^-j*w^k + w^j*w^-k
-  ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_sums_M = malloc(m*sizeof(uint64_t));
   assert(ctx->jk_sums_M);
-  for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k)
-      ctx->jk_sums_M[jk_pos(j, k, m)] =
-        add_mod_u64(jk_pairs_M[jk_pos(j, k, m)], jk_pairs_M[jk_pos(k, j, m)], p);
+    for (size_t k = 0; k < m; ++k) {
+      ctx->jk_sums_M[jk_pos(0, k, m)] =
+        add_mod_u64(jk_pairs_M[jk_pos(0, k, m)], jk_pairs_M[jk_pos(k, 0, m)], p);
   }
 
   // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
-  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_prod_M = malloc(m*sizeof(uint64_t));
   assert(ctx->jk_prod_M);
-  for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k) {
-      size_t pos = jk_pos(j, k, m);
-      uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, p, ctx->p_dash);
-      ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
-    }
+
+  for (size_t k = 0; k < m; ++k) {
+    size_t pos = jk_pos(0, k, m);
+    uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, p, ctx->p_dash);
+    ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
   }
+
 
   // 1 to n
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
