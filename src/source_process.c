@@ -345,7 +345,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
 
-    // This is similar to row sum of tje off diagonal term in the full matrix
+    // This is similar to row sum of the off diagonal term in the full matrix
     // The off diagonal term would have one subtracted from multiplicity when j = i (as there's no edge E_ii)
     uint64_t sum = 0;
 
