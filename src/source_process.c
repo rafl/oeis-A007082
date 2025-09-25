@@ -269,16 +269,17 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
 static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t acc = ctx->r;
 
+  uint64_t e = 0;
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
     if (ca >= 2) {
-      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
-      uint64_t e = (ca*(ca-1)) / 2;
-      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
+      e += (ca*(ca-1)) / 2;    
     }
   }
+
+  uint64_t two = ctx->nat_M[2];
+  uint64_t acc = mont_pow(two, e, ctx->r, p, p_dash);
 
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
