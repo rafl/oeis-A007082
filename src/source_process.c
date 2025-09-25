@@ -287,6 +287,7 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     for (size_t b = a+1; b < m; ++b) {
       uint64_t cb = c[b];
       if (!cb) continue;
+      // Try cache lookup?
       acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
     }
   }
@@ -362,6 +363,8 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
       uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // sum += W * multiplicity of (w^j)
+
+      // Try cache lookup?
       sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash), p);
     }
 
