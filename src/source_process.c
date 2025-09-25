@@ -280,8 +280,12 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     }
   }
 
+  // Could do more with the fact it's
   uint64_t two = ctx->nat_M[2];
   uint64_t acc = mont_pow(two, e, ctx->r, p, p_dash);
+
+  uint64_t pows[ctx->m];
+  memset(pows, 0, sizeof(uint64_t) * ctx->m);
 
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
@@ -290,8 +294,14 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
       uint64_t cb = c[b];
       if (!cb) continue;
       // Try cache lookup? Mabye CA and CB and then mul them?
-      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
+      uint64_t diff = b - a;
+      pows[diff] += ca*cb;
     }
+  }
+
+  for (size_t i = 0; i < ctx-> m; i++)
+  {
+    acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(0, i, m)], pows[i], ctx->r, p, p_dash), p, p_dash);
   }
 
   return acc;
