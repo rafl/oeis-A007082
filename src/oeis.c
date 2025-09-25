@@ -3,6 +3,7 @@
 #include "combine.h"
 #include "source_combine.h"
 #include "source_process.h"
+#include "source_jack.h"
 
 #include <stdio.h>
 #include <inttypes.h>
@@ -35,6 +36,8 @@ static process_mode_t parse_jack(const char *s) {
     return PROC_MODE_JACK_OFFSET;
   if (strcmp(s, "est") == 0)
     return PROC_MODE_JACKEST;
+  if (strcmp(s, "both") == 0)
+    return PROC_MODE_JACKBOTH;
   fprintf(stderr, "invalid jack mode %s\n", s);
   abort();
 }
@@ -68,8 +71,12 @@ int main (int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
+  source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool, size_t *) = source_process_new;
+  if (proc_mode == PROC_MODE_JACKBOTH)
+    newproc = source_jack_new;
+
   source_t *src = (mode & MODE_PROCESS)
-                    ? source_process_new(proc_mode, n, m_id, quiet, snapshot)
+                    ? newproc(proc_mode, n, m_id, quiet, snapshot, NULL)
                     : source_stdin_new();
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 

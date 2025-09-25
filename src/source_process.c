@@ -294,15 +294,7 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
-  uint64_t ret = mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
-
-  // TODO it is silly to do this multiply by n-1 in the loop rather than at the end
-  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
-
-  // Second multiply is due to not computing the extra col in det:
-  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
-
-  return ret;
+  return mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 }
 
 static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
@@ -327,7 +319,10 @@ static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
     ret = add_mod_u64(ret, f_n, p);
   }
 
-  return ret;
+  ret = mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
+
+  // Second multiply is due to not computing the extra col in det:
+  return mont_mul(ret, ctx->nat_M[ctx->n-1], ctx->p, ctx->p_dash);
 }
 
 static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
@@ -463,7 +458,7 @@ typedef struct {
   uint64_t m; /*w is the mth root of unity*/ 
   uint64_t *ps; /* list of primes */
   size_t idx /* withth prime*/, np /* number of primes*/, *vecss /*Some buffers for vectors*/;
-  bool quiet, snapshot; /*mode stuff - saving snapshots so you can restart*/
+  bool quiet, snapshot, borrowed; /*mode stuff - saving snapshots so you can restart*/
   size_t n_thrds; /*number of threads*/
 } proc_state_t;
 
@@ -615,9 +610,15 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   return ret(st, ctx, acc, res, p_ret);
 }
 
+size_t *source_process_vecss(source_t *self) {
+  proc_state_t *st = self->state;
+  return st->vecss;
+}
+
 static void proc_destroy(source_t *self) {
   proc_state_t *st = self->state;
-  free(st->vecss);
+  if (!st->borrowed)
+    free(st->vecss);
   free(st->ps);
   free(st);
   free(self);
@@ -625,10 +626,11 @@ static void proc_destroy(source_t *self) {
 
 #define P_STRIDE (1ULL << 10)
 
-source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot) {
+source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, bool quiet, bool snapshot, size_t *vecss) {
   uint64_t m = m_for(n);
+  assert(mode <= PROC_MODE_JACKEST);
   if (mode == PROC_MODE_JACKEST || mode == PROC_MODE_JACK_OFFSET) {
-    assert ("jack modes are only valid when n%4 == 3" && (n % 4 == 3)); 
+    assert ("jack modes are only valid when n%4 == 3 && n > 3" && (n > 3 && n % 4 == 3));
     m -= 2;
   }
 
@@ -640,9 +642,12 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id, boo
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
-  size_t *vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
-  assert(vecss);
-  *st = (proc_state_t){ .mode = mode, .n = n, .n_args=n_args, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss };
+  bool borrowed = vecss;
+  if (!vecss) {
+    vecss = malloc(CHUNK*m*(n_thrds+1+Q_CAP)*sizeof(size_t));
+    assert(vecss);
+  }
+  *st = (proc_state_t){ .mode = mode, .n = n, .n_args=n_args, .m = m, .idx = 0, .np = np, .ps = ps, .quiet = quiet, .snapshot = snapshot, .n_thrds = n_thrds, .vecss = vecss, .borrowed = borrowed };
 
   source_t *src = malloc(sizeof *src);
   assert(src);
