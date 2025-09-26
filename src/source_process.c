@@ -13,6 +13,8 @@
 #include <unistd.h>
 #include <stdio.h>
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
 }
@@ -20,6 +22,7 @@ static uint64_t m_for(uint64_t n) {
 typedef struct {
   uint64_t n, n_args, m, p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
+  *rs,
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
@@ -32,7 +35,7 @@ typedef struct {
 // index into rectangular array
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
   int64_t result = k-j;
-  return result >= 0 ? result : result + m;
+  return result >= 0 ? (uint64_t) result : result + m;
 }
 
 // shared over threads - not mutated
@@ -46,6 +49,16 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   ctx->p_dash = (uint64_t)(-inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
+
+  size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
+  ctx->rs = malloc(sizeof(uint64_t) * n_rs);
+  assert(ctx->rs);
+  
+  ctx->rs[0] = 1;
+  for (size_t i = 1; i < n_rs; i++)
+  {
+    ctx->rs[i] = mont_mul(ctx->rs[i-1], ctx->r2, ctx->p, ctx->p_dash);
+  }
 
   // initialize roots of unity
   ctx->ws_M = malloc(m*sizeof(uint64_t));
@@ -112,6 +125,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
 }
 
 static void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->rs);
   free(ctx->fact_inv_M);
   free(ctx->fact_M);
   free(ctx->ws_M);
@@ -120,6 +134,20 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
   free(ctx);
+}
+
+uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow)
+{
+  uint64_t r_pow = pow / 64;
+  uint64_t remain = pow % 64;
+  uint64_t pow2 = 1UL<<remain;
+  
+  // Pretty sure I can remove this check
+  if (pow2 >= ctx->p)
+  {
+    pow2 -= ctx->p;
+  }
+  return mont_mul(pow2, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
 }
 
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
@@ -282,7 +310,7 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
   // Could do more with the fact it's
   uint64_t two = ctx->nat_M[2];
-  uint64_t acc = mont_pow(two, e, ctx->r, p, p_dash);
+  uint64_t acc = fast_pow_2(ctx, e);
 
   uint64_t pows[ctx->m];
   memset(pows, 0, sizeof(uint64_t) * ctx->m);
@@ -293,13 +321,15 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     for (size_t b = a+1; b < m; ++b) {
       uint64_t cb = c[b];
       if (!cb) continue;
-      // Try cache lookup? Mabye CA and CB and then mul them?
+      
+      // Actually... there's even more symmetry here
       uint64_t diff = b - a;
+      diff = MIN(diff, m-diff);
       pows[diff] += ca*cb;
     }
   }
 
-  for (size_t i = 0; i < ctx-> m; i++)
+  for (size_t i = 1; i < (ctx->m+1) / 2; i++)
   {
     acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(0, i, m)], pows[i], ctx->r, p, p_dash), p, p_dash);
   }
