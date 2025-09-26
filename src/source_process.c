@@ -304,6 +304,7 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     size_t i = typ[a];
 
     // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
+
     // uint64_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
 
     // we're taking the multiplicity of 1 * this term
@@ -500,7 +501,6 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
       uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
-      // Again fill the matrix as per it's normal terms but with multiplicity of j
 
       // Could do a lookup here
       uint64_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
