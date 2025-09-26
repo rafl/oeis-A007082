@@ -24,9 +24,13 @@ static uint64_t m_for(uint64_t n) {
 }
 
 typedef struct {
-  uint64_t n, n_args, m, m_half, p, //n = number of veritcies //obvious
+  uint64_t n, n_args, m, 
+  m_half, // = (m+1)/2 - used for some jk_sums_pow cache stuff - see jk_sums_pow
+  p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
-  *rs,
+  // r is the equivilent of `1` in montgomary space. Which means `r^2` is the equivilent of `r` in montomery space
+  // which is mostly used to move numbers into montgomery space (which you do by multplying by r, which is mont_multing by r^2)
+  *rs, // cache of r^n
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
@@ -104,6 +108,8 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   for (size_t j = 0; j < ctx->m_half; j++)
   {
     ctx->jk_sums_pow_lower_M[j] = ctx->r;
+    // we do put w^0 + w^-0 = 2 into this cache currently, but we don't actually
+    // use it as we use fast_pow_2 instead.
     ctx->jk_sums_pow_lower_M[ctx->m_half + j] = ctx->jk_sums_M[j];
     ctx->jk_sums_pow_upper_M[j] = ctx->r;
     ctx->jk_sums_pow_upper_M[ctx->m_half + j] = mont_pow(ctx->jk_sums_M[j], POW_CACHE_DIVISOR, ctx->r, ctx->p, ctx->p_dash);
@@ -173,17 +179,16 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
+// Raising coputing power of 2 is easy. Just if we'd overflow 2^64
+// we need to modular divide down. 2^64 = r though. So we use a 
+// cache for r^n for how many times we overflow 2^64, and then a
+// left shift for the rest.
 uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow)
 {
   uint64_t r_pow = pow / 64;
   uint64_t remain = pow % 64;
   uint64_t pow2 = 1UL<<remain;
   
-  // Pretty sure I can remove this check
-  if (pow2 >= ctx->p)
-  {
-    pow2 -= ctx->p;
-  }
   return mont_mul(pow2, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
 }
 
