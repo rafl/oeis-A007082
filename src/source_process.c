@@ -285,7 +285,7 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     }
 
     // so prod m is the product of the row sums of the rows we're deleting
-    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+    prod_M = mont_pow(sum, c[i]-1, prod_M, p, ctx->p_dash);
   }
 
   // we divide prod_M by the multiplicty of 1 because... ?
@@ -464,7 +464,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
     // prod_M then is the multiple of all these row sums to the power of multiplicity-1
     // i.e. the product for the row sum for each deleted row
-    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+    prod_M = mont_pow(sum, c[i]-1, prod_M, p, ctx->p_dash);
   }
 
   // Now we divide prod_M by the multiplicity of 1 because???
