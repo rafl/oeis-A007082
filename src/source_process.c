@@ -14,6 +14,7 @@
 #include <stdio.h>
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
+
 #define POW_CACHE_SPLIT 6
 #define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
 
@@ -30,14 +31,17 @@ typedef struct {
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
   *jk_sums_M, // w^-j*w^k + w^j*w^-k
-  *jk_sums_pow_upper_M,
+  *jk_sums_pow_upper_M, // see jk_sums_pow
   *jk_sums_pow_lower_M,
   *ws_M, // powers of omega (m form)
   *fact_M, // i! for i <= n
   *fact_inv_M; // 1/i! for i <= n
 } prim_ctx_t;
 
-// index into rectangular array
+// We have caches of w^-j*w^k + w^j*w^-k and w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+// Note that w^-j*w^k = w^(k-j)
+// So the value of these expressions is only actually a function of j-k. We use
+// this to make the caches smaller and cache more stuff whilst still keeping everying in L1
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
   int64_t result = k-j;
   return result >= 0 ? (uint64_t) result : result + m;
@@ -91,6 +95,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
         add_mod_u64(jk_pairs_M[jk_pos(0, k, m)], jk_pairs_M[jk_pos(k, 0, m)], p);
   }
 
+  // see jk_sums_pow
   ctx->jk_sums_pow_lower_M = malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
   assert(ctx->jk_sums_pow_lower_M);
   ctx->jk_sums_pow_upper_M = malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
@@ -182,6 +187,18 @@ uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow)
   return mont_mul(pow2, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
 }
 
+// Note that w^i + w^-i = w^-i + w^i
+// So there's only actually (m+1)/2 unique values for w^-i + w^i which lets us shrink our cache 
+// size in half. The "diff" value is the index into this cache
+//
+// Raising w^-j*w^k + w^j*w^-k to intger powers is a thing we do often
+// so it's nice to just cache the results. The powers we need to go up to are
+// n_args * n_args. n_args * n_args * (m+1/2) * sizeof(uint64_t)
+// is getting kinda large for large values of n_args. I don't want the code to only
+// be efficient on machines with large L1 cache. So split the cache into two parts.
+// A cache of jk_sums^i for i < POW_CACHE_DIVISOR
+// and a cache of (jk_sums^POW_CACHE_DIVISOR)^i
+// We can then do two cache lookups and a single multiply
 int64_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow)
 {
   uint64_t upper_index = pow >> POW_CACHE_SPLIT;
