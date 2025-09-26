@@ -363,21 +363,30 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 
+// Multiplying through all the x_i*x_j^-1 + x_i^-1*x_j terms
 static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
 
+  // This is going through all the cases where x_i == x_j
+  // We'll just count how often this happens and then raise 
+  // w^0 + w^-0 = 2 to that power
   uint64_t e = 0;
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
     if (ca >= 2) {
-      e += (ca*(ca-1)) / 2;    
+      e += (ca*(ca-1));    
     }
   }
 
-  uint64_t acc = fast_pow_2(ctx, e);
+  uint64_t acc = fast_pow_2(ctx, e/2);
 
-  uint64_t pows[ctx->m];
-  memset(pows, 0, sizeof(uint64_t) * ctx->m);
+  // Now we go throug the cases where x_i != x_j
+  // We note that w^j w^-k = w^(j-k)
+  // and also that w^i + w^-i = w^-i + w^i
+  // so we keep track how often each of the (m+1)/2 possible terms happens in pows
+  // and then compute the power at the end
+  uint64_t pows[ctx->m_half];
+  memset(pows, 0, sizeof(uint64_t) * ctx->m_half);
 
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
@@ -393,17 +402,11 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     }
   }
 
+   // actually the (w^0 + w^-0 term) was already accounted for earier
+   // so the i=0 term is always zero and we can skip it
   for (size_t i = 1; i < ctx->m_half; i++)
   {
-    // TODO can probably remove
-    assert(pows[i] <= ctx->n_args * ctx->n_args);
-    uint64_t pow_val = mont_pow(ctx->jk_sums_M[jk_pos(0, i, m)], pows[i], ctx->r, p, p_dash);
-    uint64_t new_pow_val = jk_sums_pow(ctx, i, pows[i]);
-
-    if (pow_val != new_pow_val)
-    {
-      printf("%lu %lu\n", pow_val, new_pow_val);
-    }
+    uint64_t pow_val = jk_sums_pow(ctx, i, pows[i]);
 
     acc = mont_mul(acc, pow_val, p, p_dash);
   }
