@@ -14,19 +14,24 @@
 #include <stdio.h>
 
 #define MIN(a,b) ((a) < (b) ? (a) : (b))
+#define POW_CACHE_SPLIT 6
+#define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
+
 
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
 }
 
 typedef struct {
-  uint64_t n, n_args, m, p, //n = number of veritcies //obvious
+  uint64_t n, n_args, m, m_half, p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
   *rs,
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
   *jk_sums_M, // w^-j*w^k + w^j*w^-k
+  *jk_sums_pow_upper_M,
+  *jk_sums_pow_lower_M,
   *ws_M, // powers of omega (m form)
   *fact_M, // i! for i <= n
   *fact_inv_M; // 1/i! for i <= n
@@ -45,6 +50,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   ctx->n = n;
   ctx->n_args = n_args;
   ctx->m = m;
+  ctx->m_half = (ctx->m+1) / 2;
   ctx->p = p;
   ctx->p_dash = (uint64_t)(-inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
@@ -53,6 +59,8 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
   ctx->rs = malloc(sizeof(uint64_t) * n_rs);
   assert(ctx->rs);
+
+  assert((n_args < POW_CACHE_DIVISOR) && "n too big, increase POW_CACHE_SPLIT");
   
   ctx->rs[0] = 1;
   for (size_t i = 1; i < n_rs; i++)
@@ -81,6 +89,28 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
     for (size_t k = 0; k < m; ++k) {
       ctx->jk_sums_M[jk_pos(0, k, m)] =
         add_mod_u64(jk_pairs_M[jk_pos(0, k, m)], jk_pairs_M[jk_pos(k, 0, m)], p);
+  }
+
+  ctx->jk_sums_pow_lower_M = malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
+  assert(ctx->jk_sums_pow_lower_M);
+  ctx->jk_sums_pow_upper_M = malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
+  assert(ctx->jk_sums_pow_upper_M);
+  
+  for (size_t j = 0; j < ctx->m_half; j++)
+  {
+    ctx->jk_sums_pow_lower_M[j] = ctx->r;
+    ctx->jk_sums_pow_lower_M[ctx->m_half + j] = ctx->jk_sums_M[j];
+    ctx->jk_sums_pow_upper_M[j] = ctx->r;
+    ctx->jk_sums_pow_upper_M[ctx->m_half + j] = mont_pow(ctx->jk_sums_M[j], POW_CACHE_DIVISOR, ctx->r, ctx->p, ctx->p_dash);
+  }
+  
+  for (size_t i = 2; i < POW_CACHE_DIVISOR; i++)
+  {
+    for (size_t j = 0; j < ctx->m_half; j++)
+    {
+      ctx->jk_sums_pow_lower_M[i*ctx->m_half + j] = mont_mul(ctx->jk_sums_pow_lower_M[(i-1)*ctx->m_half + j], ctx->jk_sums_pow_lower_M[ctx->m_half + j], ctx->p, ctx->p_dash); 
+      ctx->jk_sums_pow_upper_M[i*ctx->m_half + j] = mont_mul(ctx->jk_sums_pow_upper_M[(i-1)*ctx->m_half + j], ctx->jk_sums_pow_upper_M[ctx->m_half + j], ctx->p, ctx->p_dash); 
+    }
   }
 
   // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
@@ -133,6 +163,8 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->nat_inv_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
+  free(ctx->jk_sums_pow_lower_M);
+  free(ctx->jk_sums_pow_upper_M);
   free(ctx);
 }
 
@@ -148,6 +180,17 @@ uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow)
     pow2 -= ctx->p;
   }
   return mont_mul(pow2, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
+}
+
+int64_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow)
+{
+  uint64_t upper_index = pow >> POW_CACHE_SPLIT;
+  uint64_t lower_index = pow & (POW_CACHE_DIVISOR - 1);
+
+  uint64_t upper_index_full = upper_index * ctx->m_half + diff;
+  uint64_t lower_index_full = lower_index * ctx->m_half + diff;
+
+  return mont_mul(ctx->jk_sums_pow_upper_M[upper_index_full], ctx->jk_sums_pow_lower_M[lower_index_full], ctx->p, ctx->p_dash);
 }
 
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
@@ -308,8 +351,6 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     }
   }
 
-  // Could do more with the fact it's
-  uint64_t two = ctx->nat_M[2];
   uint64_t acc = fast_pow_2(ctx, e);
 
   uint64_t pows[ctx->m];
@@ -322,16 +363,26 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
       uint64_t cb = c[b];
       if (!cb) continue;
       
-      // Actually... there's even more symmetry here
+      // Maybe a slightly better way to do this
       uint64_t diff = b - a;
       diff = MIN(diff, m-diff);
       pows[diff] += ca*cb;
     }
   }
 
-  for (size_t i = 1; i < (ctx->m+1) / 2; i++)
+  for (size_t i = 1; i < ctx->m_half; i++)
   {
-    acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(0, i, m)], pows[i], ctx->r, p, p_dash), p, p_dash);
+    // TODO can probably remove
+    assert(pows[i] <= ctx->n_args * ctx->n_args);
+    uint64_t pow_val = mont_pow(ctx->jk_sums_M[jk_pos(0, i, m)], pows[i], ctx->r, p, p_dash);
+    uint64_t new_pow_val = jk_sums_pow(ctx, i, pows[i]);
+
+    if (pow_val != new_pow_val)
+    {
+      printf("%lu %lu\n", pow_val, new_pow_val);
+    }
+
+    acc = mont_mul(acc, pow_val, p, p_dash);
   }
 
   return acc;

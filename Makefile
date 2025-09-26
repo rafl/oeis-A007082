@@ -1,4 +1,4 @@
-CFLAGS := -g -std=gnu18 -O0 -march=native -flto -Wall -Wextra \
+CFLAGS := -g -std=gnu18 -O3 -march=native -flto -Wall -Wextra \
           $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
