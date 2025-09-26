@@ -64,32 +64,6 @@ uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_d
   return acc;
 }
 
-// Function to compute the extended Euclidean algorithm
-// It returns gcd(a, b), and updates x and y such that: a*x + b*y = gcd(a, b)
-void extended_euclidean(uint64_t a, uint64_t b, uint64_t *x, uint64_t *y) {
-    if (b == 0) {
-        *x = 1;
-        *y = 0;
-        return;
-    }
-
-    uint64_t x1, y1;
-    extended_euclidean(b, a % b, &x1, &y1);
-
-    *x = y1;
-    *y = x1 - (a / b) * y1;
-
-    return;
-}
-
-// Function to compute modular inverse of a modulo p (assuming p is prime)
-uint64_t mod_inverse(uint64_t a, uint64_t p) {
-    uint64_t x, y;
-    extended_euclidean(a, p, &x, &y);
-
-    return (x % p + p) % p;
-}
-
 uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
   return mont_pow(x, p-3, x, p, p_dash);
 }
