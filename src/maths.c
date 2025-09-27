@@ -80,8 +80,10 @@ uint64_t extended_euclidean(uint64_t a, uint64_t b)
   uint64_t spare;
   size_t n = 0;
   while (r1) {
+    // compiler should optimize these two into a single instruction
     uint64_t q = r0 / r1;
-    r0 = r0 > q*r1 ? r0-q*r1 : q*r1-r0;
+    r0 = r0 % r1;
+
     spare = r0;
     r0 = r1;
     r1 = spare;
