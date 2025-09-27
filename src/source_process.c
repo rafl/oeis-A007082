@@ -27,7 +27,7 @@ typedef struct {
   uint64_t n, n_args, m, 
   m_half, // = (m+1)/2 - used for some jk_sums_pow cache stuff - see jk_sums_pow
   p, //n = number of veritcies //obvious
-  p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
+  p_dash, r, r2, r3, // montgomery stuff, a _M suffix implies something is in montgomery form
   // r is the equivilent of `1` in montgomary space. Which means `r^2` is the equivilent of `r` in montomery space
   // which is mostly used to move numbers into montgomery space (which you do by multplying by r, which is mont_multing by r^2)
   *rs, // cache of r^n
@@ -63,6 +63,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   ctx->p_dash = (uint64_t)(-inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
+  ctx->r3 = (uint128_t)ctx->r2 * ctx->r % p;
 
   size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
   ctx->rs = malloc(sizeof(uint64_t) * n_rs);
@@ -130,7 +131,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
 
   for (size_t k = 0; k < m; ++k) {
     size_t pos = jk_pos(0, k, m);
-    uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->rs[3], p, ctx->p_dash);
+    uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r3, p, ctx->p_dash);
     ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
   }
 
@@ -146,7 +147,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   assert(ctx->nat_inv_M);
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
-    ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->rs[3], p, ctx->p_dash);
+    ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r3, p, ctx->p_dash);
 
   // i! for i = 1 to n+1
   ctx->fact_M = malloc((n+1)*sizeof(uint64_t));
@@ -158,7 +159,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   // 1/i! for i = 1 to n+1
   ctx->fact_inv_M = malloc((n+1)*sizeof(uint64_t));
   assert(ctx->fact_inv_M);
-  ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->rs[3], p, ctx->p_dash);
+  ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r3, p, ctx->p_dash);
   for (size_t i = n; i; --i)
     ctx->fact_inv_M[i-1] = mont_mul(ctx->fact_inv_M[i], ctx->nat_M[i], p, ctx->p_dash);
 
@@ -269,7 +270,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     }
   }
 
-  return mont_mul(det, mont_inv(scaling_factor, ctx->rs[3], p, p_dash), p, p_dash);
+  return mont_mul(det, mont_inv(scaling_factor, ctx->r3, p, p_dash), p, p_dash);
 }
 
 static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
@@ -367,46 +368,41 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
 
-  // This is going through all the cases where x_i == x_j
-  // We'll just count how often this happens and then raise 
-  // w^0 + w^-0 = 2 to that power
   uint64_t e = 0;
-  for (size_t a = 0; a < m; ++a) {
-    uint64_t ca = c[a];
-    if (ca >= 2) {
-      e += (ca*(ca-1));    
-    }
-  }
-
-  uint64_t acc = fast_pow_2(ctx, e/2);
-
   // Now we go throug the cases where x_i != x_j
   // We note that w^j w^-k = w^(j-k)
   // and also that w^i + w^-i = w^-i + w^i
   // so we keep track how often each of the (m+1)/2 possible terms happens in pows
   // and then compute the power at the end
-  uint64_t pows[ctx->m_half];
-  memset(pows, 0, sizeof(uint64_t) * ctx->m_half);
+  uint64_t pows[ctx->m];
+  memset(pows, 0, sizeof(uint64_t) * ctx->m);
 
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
     if (!ca) continue;
+
+
+    // This is going through all the cases where x_i == x_j
+    // We'll just count how often this happens and then raise 
+    // w^0 + w^-0 = 2 to that power
+      e += (ca*(ca-1));    
+
     for (size_t b = a+1; b < m; ++b) {
       uint64_t cb = c[b];
-      if (!cb) continue;
       
       // Maybe a slightly better way to do this
       uint64_t diff = b - a;
-      diff = MIN(diff, m-diff);
       pows[diff] += ca*cb;
     }
   }
+
+  uint64_t acc = fast_pow_2(ctx, e/2);
 
    // actually the (w^0 + w^-0 term) was already accounted for earier
    // so the i=0 term is always zero and we can skip it
   for (size_t i = 1; i < ctx->m_half; i++)
   {
-    uint64_t pow_val = jk_sums_pow(ctx, i, pows[i]);
+    uint64_t pow_val = jk_sums_pow(ctx, i, pows[i] + pows[m-i]);
 
     acc = mont_mul(acc, pow_val, p, p_dash);
   }
@@ -657,7 +653,7 @@ static size_t get_num_threads() {
 }
 
 static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res, uint64_t *p_ret) {
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n_args-1, ctx->r, ctx->p, ctx->p_dash), ctx->rs[3], ctx->p, ctx->p_dash);
+  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n_args-1, ctx->r, ctx->p, ctx->p_dash), ctx->r3, ctx->p, ctx->p_dash);
   uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p, ctx->p_dash);
   prim_ctx_free(ctx);
 
