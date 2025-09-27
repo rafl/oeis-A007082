@@ -52,7 +52,7 @@ inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
 }
 
 // Pass `r` (montomery 1) into acc for regular power. If you're just going to multiply
-// your power into another number you can ass that into acc instead to save a multiply
+// your power into another number you can put that into acc instead to save a multiply
 uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_dash) {
   // Compute by repeated squaring
   while (e) {
@@ -64,8 +64,6 @@ uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_d
   return acc;
 }
 
-typedef uint64_t T;
-
 void swap(uint64_t * a, uint64_t * b)
 {
   uint64_t spare = *b;
@@ -73,17 +71,17 @@ void swap(uint64_t * a, uint64_t * b)
   *a = spare;
 }
 
-uint64_t extended_euclidean(const T a, const T b)
+uint64_t extended_euclidean(uint64_t a, uint64_t b)
 {
-  T r0 = a;
-  T r1 = b;
-  T s0 = 1;
-  T s1 = 0;
+  uint64_t r0 = a;
+  uint64_t r1 = b;
+  uint64_t s0 = 1;
+  uint64_t s1 = 0;
   size_t n = 0;
   while (r1) {
-    T q = r0 / r1;
-    r0 = r0>q*r1?r0-q*r1:q*r1-r0; swap(&r0,&r1);
-    s0 = s0+q*s1; swap(&s0,&s1);
+    uint64_t q = r0 / r1;
+    r0 = r0 > q*r1 ? r0-q*r1 : q*r1-r0; swap(&r0, &r1);
+    s0 = s0+q*s1; swap(&s0, &s1);
     ++n;
   }
   // gcd = r0
@@ -91,14 +89,11 @@ uint64_t extended_euclidean(const T a, const T b)
   return s0;
 }
 
-// Function to compute modular inverse of a modulo p (assuming p is prime)
-uint64_t mod_inverse(uint64_t a, uint64_t p) {
-    return extended_euclidean(a, p);
-}
-
 uint64_t mont_inv(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
-  // return mont_pow(x, p-3, x, p, p_dash);
-  uint64_t inv = mod_inverse(x, p);
+  uint64_t inv = extended_euclidean(x, p);
+  // inv gives us a value when multiplied gives 1, for a number that when mont mulled gives 1 
+  // we need to times by r. For a number that when mont mulled gives r we need to times by r2
+  // timesing by r2 is the same as mont mulling by r3
   return mont_mul(r3, inv, p, p_dash);
 }
 
