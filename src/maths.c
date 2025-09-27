@@ -97,18 +97,9 @@ uint64_t mod_inverse(uint64_t a, uint64_t p) {
 }
 
 uint64_t mont_inv(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
-  // uint64_t old_val =
-  return mont_pow(x, p-3, x, p, p_dash);
-//   uint64_t inv = mod_inverse(x, p);
-//   // uint64_t new_val = mont_mul(r2, inv, p, p_dash);
-//   uint64_t new_val = mont_mul(r3, inv, p, p_dash);
-
-//   // if (old_val != new_val)
-//   // {
-//   //   assert(old_val == new_val);
-//   // }
-
-//   return new_val;
+  // return mont_pow(x, p-3, x, p, p_dash);
+  uint64_t inv = mod_inverse(x, p);
+  return mont_mul(r3, inv, p, p_dash);
 }
 
 // Does a1 * b1 - a2 * b2
