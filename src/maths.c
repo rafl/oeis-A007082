@@ -64,13 +64,6 @@ uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_d
   return acc;
 }
 
-void swap(uint64_t * a, uint64_t * b)
-{
-  uint64_t spare = *b;
-  *b = *a;
-  *a = spare;
-}
-
 uint64_t extended_euclidean(uint64_t a, uint64_t b)
 {
   uint64_t r0 = a;
