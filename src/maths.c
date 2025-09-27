@@ -77,11 +77,18 @@ uint64_t extended_euclidean(uint64_t a, uint64_t b)
   uint64_t r1 = b;
   uint64_t s0 = 1;
   uint64_t s1 = 0;
+  uint64_t spare;
   size_t n = 0;
   while (r1) {
     uint64_t q = r0 / r1;
-    r0 = r0 > q*r1 ? r0-q*r1 : q*r1-r0; swap(&r0, &r1);
-    s0 = s0+q*s1; swap(&s0, &s1);
+    r0 = r0 > q*r1 ? r0-q*r1 : q*r1-r0;
+    spare = r0;
+    r0 = r1;
+    r1 = spare;
+    s0 = s0+q*s1;
+    spare = s0;
+    s0 = s1;
+    s1 = spare;
     ++n;
   }
   // gcd = r0
