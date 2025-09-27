@@ -51,8 +51,9 @@ inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   return (x >= y) ? x - y : x + p - y;
 }
 
-uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t r, uint64_t p, uint64_t p_dash) {
-  uint64_t acc = r;
+// Pass `r` (montomery 1) into acc for regular power. If you're just going to multiply
+// your power into another number you can ass that into acc instead to save a multiply
+uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_dash) {
   // Compute by repeated squaring
   while (e) {
     if (e & 1)
@@ -64,7 +65,7 @@ uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t r, uint64_t p, uint64_t p_das
 }
 
 uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
-  return mont_pow(x, p-2, r, p, p_dash);
+  return mont_pow(x, p-3, x, p, p_dash);
 }
 
 // Does a1 * b1 - a2 * b2

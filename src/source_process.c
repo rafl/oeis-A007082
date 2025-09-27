@@ -13,25 +13,42 @@
 #include <unistd.h>
 #include <stdio.h>
 
+#define MIN(a,b) ((a) < (b) ? (a) : (b))
+
+#define POW_CACHE_SPLIT 6
+#define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
+
+
 static uint64_t m_for(uint64_t n) {
   return 2*((n+1)/4)+1;
 }
 
 typedef struct {
-  uint64_t n, n_args, m, p, //n = number of veritcies //obvious
+  uint64_t n, n_args, m, 
+  m_half, // = (m+1)/2 - used for some jk_sums_pow cache stuff - see jk_sums_pow
+  p, //n = number of veritcies //obvious
   p_dash, r, r2, // montgomery stuff, a _M suffix implies something is in montgomery form
+  // r is the equivilent of `1` in montgomary space. Which means `r^2` is the equivilent of `r` in montomery space
+  // which is mostly used to move numbers into montgomery space (which you do by multplying by r, which is mont_multing by r^2)
+  *rs, // cache of r^n
   *jk_prod_M, // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
   *nat_M, // natural numbers up to n (inclusive)
   *nat_inv_M, // inverses of natural numbers up to n (inclusive)
   *jk_sums_M, // w^-j*w^k + w^j*w^-k
+  *jk_sums_pow_upper_M, // see jk_sums_pow
+  *jk_sums_pow_lower_M,
   *ws_M, // powers of omega (m form)
   *fact_M, // i! for i <= n
   *fact_inv_M; // 1/i! for i <= n
 } prim_ctx_t;
 
-// index into rectangular array
+// We have caches of w^-j*w^k + w^j*w^-k and w^j*w^-k / (w^-j*w^k + w^j*w^-k)
+// Note that w^-j*w^k = w^(k-j)
+// So the value of these expressions is only actually a function of j-k. We use
+// this to make the caches smaller and cache more stuff whilst still keeping everying in L1
 static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
-  return j*m + k;
+  int64_t result = k-j;
+  return result >= 0 ? (uint64_t) result : result + m;
 }
 
 // shared over threads - not mutated
@@ -41,10 +58,23 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   ctx->n = n;
   ctx->n_args = n_args;
   ctx->m = m;
+  ctx->m_half = (ctx->m+1) / 2;
   ctx->p = p;
   ctx->p_dash = (uint64_t)(-inv64_u64(p));
   ctx->r = ((uint128_t)1 << 64) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
+
+  size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
+  ctx->rs = malloc(sizeof(uint64_t) * n_rs);
+  assert(ctx->rs);
+
+  assert((n_args < POW_CACHE_DIVISOR) && "n too big, increase POW_CACHE_SPLIT");
+  
+  ctx->rs[0] = 1;
+  for (size_t i = 1; i < n_rs; i++)
+  {
+    ctx->rs[i] = mont_mul(ctx->rs[i-1], ctx->r2, ctx->p, ctx->p_dash);
+  }
 
   // initialize roots of unity
   ctx->ws_M = malloc(m*sizeof(uint64_t));
@@ -62,24 +92,48 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
   }
 
   // cache of // w^-j*w^k + w^j*w^-k
-  ctx->jk_sums_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_sums_M = malloc(m*sizeof(uint64_t));
   assert(ctx->jk_sums_M);
-  for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k)
-      ctx->jk_sums_M[jk_pos(j, k, m)] =
-        add_mod_u64(jk_pairs_M[jk_pos(j, k, m)], jk_pairs_M[jk_pos(k, j, m)], p);
+    for (size_t k = 0; k < m; ++k) {
+      ctx->jk_sums_M[jk_pos(0, k, m)] =
+        add_mod_u64(jk_pairs_M[jk_pos(0, k, m)], jk_pairs_M[jk_pos(k, 0, m)], p);
+  }
+
+  // see jk_sums_pow
+  ctx->jk_sums_pow_lower_M = malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
+  assert(ctx->jk_sums_pow_lower_M);
+  ctx->jk_sums_pow_upper_M = malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
+  assert(ctx->jk_sums_pow_upper_M);
+  
+  for (size_t j = 0; j < ctx->m_half; j++)
+  {
+    ctx->jk_sums_pow_lower_M[j] = ctx->r;
+    // we do put w^0 + w^-0 = 2 into this cache currently, but we don't actually
+    // use it as we use fast_pow_2 instead.
+    ctx->jk_sums_pow_lower_M[ctx->m_half + j] = ctx->jk_sums_M[j];
+    ctx->jk_sums_pow_upper_M[j] = ctx->r;
+    ctx->jk_sums_pow_upper_M[ctx->m_half + j] = mont_pow(ctx->jk_sums_M[j], POW_CACHE_DIVISOR, ctx->r, ctx->p, ctx->p_dash);
+  }
+  
+  for (size_t i = 2; i < POW_CACHE_DIVISOR; i++)
+  {
+    for (size_t j = 0; j < ctx->m_half; j++)
+    {
+      ctx->jk_sums_pow_lower_M[i*ctx->m_half + j] = mont_mul(ctx->jk_sums_pow_lower_M[(i-1)*ctx->m_half + j], ctx->jk_sums_pow_lower_M[ctx->m_half + j], ctx->p, ctx->p_dash); 
+      ctx->jk_sums_pow_upper_M[i*ctx->m_half + j] = mont_mul(ctx->jk_sums_pow_upper_M[(i-1)*ctx->m_half + j], ctx->jk_sums_pow_upper_M[ctx->m_half + j], ctx->p, ctx->p_dash); 
+    }
   }
 
   // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
-  ctx->jk_prod_M = malloc(m*m*sizeof(uint64_t));
+  ctx->jk_prod_M = malloc(m*sizeof(uint64_t));
   assert(ctx->jk_prod_M);
-  for (size_t j = 0; j < m; ++j) {
-    for (size_t k = 0; k < m; ++k) {
-      size_t pos = jk_pos(j, k, m);
-      uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, p, ctx->p_dash);
-      ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
-    }
+
+  for (size_t k = 0; k < m; ++k) {
+    size_t pos = jk_pos(0, k, m);
+    uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r, p, ctx->p_dash);
+    ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
   }
+
 
   // 1 to n
   ctx->nat_M = malloc((n+1)*sizeof(uint64_t));
@@ -112,6 +166,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_
 }
 
 static void prim_ctx_free(prim_ctx_t *ctx) {
+  free(ctx->rs);
   free(ctx->fact_inv_M);
   free(ctx->fact_M);
   free(ctx->ws_M);
@@ -119,7 +174,45 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->nat_inv_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
+  free(ctx->jk_sums_pow_lower_M);
+  free(ctx->jk_sums_pow_upper_M);
   free(ctx);
+}
+
+// Raising coputing power of 2 is easy. Just if we'd overflow 2^64
+// we need to modular divide down. 2^64 = r though. So we use a 
+// cache for r^n for how many times we overflow 2^64, and then a
+// left shift for the rest.
+uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow)
+{
+  uint64_t r_pow = pow / 64;
+  uint64_t remain = pow % 64;
+  uint64_t pow2 = 1UL<<remain;
+  
+  return mont_mul(pow2, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
+}
+
+// Note that w^i + w^-i = w^-i + w^i
+// So there's only actually (m+1)/2 unique values for w^-i + w^i which lets us shrink our cache 
+// size in half. The "diff" value is the index into this cache
+//
+// Raising w^-j*w^k + w^j*w^-k to intger powers is a thing we do often
+// so it's nice to just cache the results. The powers we need to go up to are
+// n_args * n_args. n_args * n_args * (m+1/2) * sizeof(uint64_t)
+// is getting kinda large for large values of n_args. I don't want the code to only
+// be efficient on machines with large L1 cache. So split the cache into two parts.
+// A cache of jk_sums^i for i < POW_CACHE_DIVISOR
+// and a cache of (jk_sums^POW_CACHE_DIVISOR)^i
+// We can then do two cache lookups and a single multiply
+int64_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow)
+{
+  uint64_t upper_index = pow >> POW_CACHE_SPLIT;
+  uint64_t lower_index = pow & (POW_CACHE_DIVISOR - 1);
+
+  uint64_t upper_index_full = upper_index * ctx->m_half + diff;
+  uint64_t lower_index_full = lower_index * ctx->m_half + diff;
+
+  return mont_mul(ctx->jk_sums_pow_upper_M[upper_index_full], ctx->jk_sums_pow_lower_M[lower_index_full], ctx->p, ctx->p_dash);
 }
 
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
@@ -144,9 +237,11 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     // If the cell on the diagonal we're about to pivot off is zero - find the next row with a non zero entry in that col
     while (pivot_i < dim && A[pivot_i*dim + k] == 0) ++pivot_i;
     // if there was no non-zero cell - det is zero
+
+    // This is unreachable except in the JackApprox case
     if (pivot_i == dim) return 0;
 
-
+    // We think this happens almost never
     if (pivot_i != k) {
       // We swap the rows over so that we have a non zero el on the diagonal
       for (size_t j = 0; j < dim; ++j) {
@@ -212,7 +307,7 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     }
 
     // so prod m is the product of the row sums of the rows we're deleting
-    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+    prod_M = mont_pow(sum, c[i]-1, prod_M, p, ctx->p_dash);
   }
 
   // we divide prod_M by the multiplicty of 1 because... ?
@@ -231,6 +326,7 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     size_t i = typ[a];
 
     // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
+
     // uint64_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
 
     // we're taking the multiplicity of 1 * this term
@@ -267,18 +363,30 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 
+// Multiplying through all the x_i*x_j^-1 + x_i^-1*x_j terms
 static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t acc = ctx->r;
 
+  // This is going through all the cases where x_i == x_j
+  // We'll just count how often this happens and then raise 
+  // w^0 + w^-0 = 2 to that power
+  uint64_t e = 0;
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
     if (ca >= 2) {
-      uint64_t base = ctx->jk_sums_M[jk_pos(a, a, m)];
-      uint64_t e = (ca*(ca-1)) / 2;
-      acc = mont_mul(acc, mont_pow(base, e, ctx->r, p, p_dash), p, p_dash);
+      e += (ca*(ca-1));    
     }
   }
+
+  uint64_t acc = fast_pow_2(ctx, e/2);
+
+  // Now we go throug the cases where x_i != x_j
+  // We note that w^j w^-k = w^(j-k)
+  // and also that w^i + w^-i = w^-i + w^i
+  // so we keep track how often each of the (m+1)/2 possible terms happens in pows
+  // and then compute the power at the end
+  uint64_t pows[ctx->m_half];
+  memset(pows, 0, sizeof(uint64_t) * ctx->m_half);
 
   for (size_t a = 0; a < m; ++a) {
     uint64_t ca = c[a];
@@ -286,8 +394,21 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
     for (size_t b = a+1; b < m; ++b) {
       uint64_t cb = c[b];
       if (!cb) continue;
-      acc = mont_mul(acc, mont_pow(ctx->jk_sums_M[jk_pos(a, b, m)], ca*cb, ctx->r, p, p_dash), p, p_dash);
+      
+      // Maybe a slightly better way to do this
+      uint64_t diff = b - a;
+      diff = MIN(diff, m-diff);
+      pows[diff] += ca*cb;
     }
+  }
+
+   // actually the (w^0 + w^-0 term) was already accounted for earier
+   // so the i=0 term is always zero and we can skip it
+  for (size_t i = 1; i < ctx->m_half; i++)
+  {
+    uint64_t pow_val = jk_sums_pow(ctx, i, pows[i]);
+
+    acc = mont_mul(acc, pow_val, p, p_dash);
   }
 
   return acc;
@@ -344,6 +465,9 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   // for each i where w^i has non zero multiplicity in our args
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
+    if (c[i] == 1) {
+      continue;
+    }
 
     // This is similar to row sum of the off diagonal term in the full matrix
     // The off diagonal term would have one subtracted from multiplicity when j = i (as there's no edge E_ii)
@@ -358,12 +482,14 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
       uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // sum += W * multiplicity of (w^j)
+
+      // Try cache lookup?
       sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash), p);
     }
 
     // prod_M then is the multiple of all these row sums to the power of multiplicity-1
     // i.e. the product for the row sum for each deleted row
-    prod_M = mont_mul(prod_M, mont_pow(sum, c[i]-1, ctx->r, p, ctx->p_dash), p, ctx->p_dash);
+    prod_M = mont_pow(sum, c[i]-1, prod_M, p, ctx->p_dash);
   }
 
   // Now we divide prod_M by the multiplicity of 1 because???
@@ -400,10 +526,13 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 
       uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
-      // Again fill the matrix as per it's normal terms but with multiplicity of j
+
+      // Could do a lookup here
       uint64_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
 
       // This is the -1 coefficient on the off diag elements
+
+      // We could flip the sign here to avoid some subtractions...
       A[(a-1)*dim + (b-1)] = p - v;
       // and add it to the total for the diag elements
       diag = add_mod_u64(diag, v, p);
