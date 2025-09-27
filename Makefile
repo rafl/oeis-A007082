@@ -1,5 +1,9 @@
+DEBUG := 1
+
+-include .config
+
 CFLAGS := -g -std=gnu18 -O3 -march=native -flto -Wall -Wextra \
-          $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP
+          $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP -DDEBUG=$(DEBUG)
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
 PGO ?= none
