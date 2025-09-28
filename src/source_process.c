@@ -508,7 +508,7 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
     size_t i = typ[a];
 
     // contribution from the column removed to form the minor (that's a consant 1 - so w^0 )
-    uint64_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+    uint64_t W_del = ctx->jk_prod_M[m-i];
 
     // When making the "laplaican" the diagonal is the sum of all off-diagonal elements in the row of the full matrix
     // including the column dropped to form the minor. So we add that to the diag here (with multiplicity)
