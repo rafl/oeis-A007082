@@ -12,6 +12,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         compiler: [gcc, clang]
+        slow_division: [0, 1]
     steps:
       - uses: actions/checkout@v4
       - name: Install ${{ matrix.compiler }} (Ubuntu)
@@ -34,6 +35,6 @@ jobs:
         env:
           CC: ${{ matrix.compiler }}
       - name: Run test suite
-        run: make test N=11
+        run: make test N=11 SLOW_DIVISION=${{ matrix.slow_division }}
         env:
           CC: ${{ matrix.compiler }}
