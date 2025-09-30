@@ -315,7 +315,7 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   // prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
 
   // If all terms were the same power of w and we quotiented everything out
-  if (r == 1)
+  if (r <= 1)
     return prod_M;
 
   // We're constructing the minor of the reduced matrix
