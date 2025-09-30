@@ -52,7 +52,7 @@ inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
 }
 
 // Pass `r` (montomery 1) into acc for regular power. If you're just going to multiply
-// your power into another number you can ass that into acc instead to save a multiply
+// your power into another number you can put that into acc instead to save a multiply
 uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_dash) {
   // Compute by repeated squaring
   while (e) {
@@ -64,8 +64,40 @@ uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_d
   return acc;
 }
 
-uint64_t mont_inv(uint64_t x, uint64_t r, uint64_t p, uint64_t p_dash) {
+uint64_t extended_euclidean(uint64_t a, uint64_t b)
+{
+  uint64_t r0 = a;
+  uint64_t r1 = b;
+  uint64_t s0 = 1;
+  uint64_t s1 = 0;
+  uint64_t spare;
+  size_t n = 0;
+  while (r1) {
+    // compiler should optimize these two into a single instruction
+    uint64_t q = r0 / r1;
+    spare = r0 % r1;
+    r0 = r1;
+    r1 = spare;
+    spare = s0+q*s1;
+    s0 = s1;
+    s1 = spare;
+    ++n;
+  }
+  // gcd = r0
+  if (n%2) s0=b-s0;
+  return s0;
+}
+
+uint64_t mont_inv(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
+#ifndef SLOW_DIVISION
+  uint64_t inv = extended_euclidean(x, p);
+  // inv gives us a value when multiplied gives 1, for a number that when mont mulled gives 1 
+  // we need to times by r. For a number that when mont mulled gives r we need to times by r2
+  // timesing by r2 is the same as mont mulling by r3
+  return mont_mul(r3, inv, p, p_dash);
+#else
   return mont_pow(x, p-3, x, p, p_dash);
+#endif
 }
 
 // Does a1 * b1 - a2 * b2
