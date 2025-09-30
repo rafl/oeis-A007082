@@ -37,7 +37,7 @@ UTIL_OBJS := $(filter-out $(MAIN_OBJS),$(OBJS))
 
 TARGETS := $(patsubst %.c,%,$(MAIN_FILES))
 
-.PHONY: all gen use optimised clean pgo-clean test
+.PHONY: all gen use optimised clean pgo-clean test fmt
 
 all: $(if $(filter use,$(PGO)),$(PROFDATA)) $(TARGETS)
 
@@ -77,3 +77,6 @@ pgo-clean:
 
 test: oeis
 	@bash test.sh $(N)
+
+fmt:
+	bash -c 'shopt -s globstar; clang-format -i -- src/**.c include/**.h'
