@@ -13,8 +13,6 @@
 #include <unistd.h>
 #include <stdio.h>
 
-#define MIN(a,b) ((a) < (b) ? (a) : (b))
-
 #define POW_CACHE_SPLIT 6
 #define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
 
