@@ -89,7 +89,7 @@ uint64_t extended_euclidean(uint64_t a, uint64_t b)
 }
 
 uint64_t mont_inv(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
-#ifndef SLOW_DIVISION
+#if !SLOW_DIVISION
   uint64_t inv = extended_euclidean(x, p);
   // inv gives us a value when multiplied gives 1, for a number that when mont mulled gives 1 
   // we need to times by r. For a number that when mont mulled gives r we need to times by r2
