@@ -94,17 +94,26 @@ inline uint64_t extended_euclidean(uint64_t a, uint64_t b)
   return s0;
 }
 
-inline uint64_t mont_inv(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
 #if !SLOW_DIVISION
+#  define mont_inv(w,x,y,z) mont_inv_act((w),(x),(y),(z))
+
+inline uint64_t mont_inv_act(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
   uint64_t inv = extended_euclidean(x, p);
   // inv gives us a value when multiplied gives 1, for a number that when mont mulled gives 1 
   // we need to times by r. For a number that when mont mulled gives r we need to times by r2
   // timesing by r2 is the same as mont mulling by r3
   return mont_mul(r3, inv, p, p_dash);
-#else
-  return mont_pow(x, p-3, x, p, p_dash);
-#endif
 }
+
+#else
+#  define mont_inv(w,x,y,z) mont_inv_act((w),(y),(z))
+
+inline uint64_t mont_inv_act(uint64_t x, uint64_t p, uint64_t p_dash) {
+  return mont_pow(x, p-3, x, p, p_dash);
+}
+
+#endif
+
 
 // Does a1 * b1 - a2 * b2
 inline uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2, uint64_t p, uint64_t p_dash) {
