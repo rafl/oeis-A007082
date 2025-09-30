@@ -1,10 +1,10 @@
 #pragma once
 
-#include <stddef.h>
-#include <stdint.h>
-#include <stdbool.h>
 #include <pthread.h>
 #include <stdatomic.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 
 typedef struct {
   _Atomic size_t *done, *q_fill;
@@ -21,5 +21,6 @@ typedef struct {
   pthread_t prog;
 } progress_t;
 
-void progress_start(progress_t *, uint64_t, _Atomic size_t *, size_t, _Atomic size_t *);
+void progress_start(progress_t *, uint64_t, _Atomic size_t *, size_t,
+                    _Atomic size_t *);
 void progress_stop(progress_t *restrict);

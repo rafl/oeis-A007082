@@ -2,8 +2,8 @@
 
 #include "debug.h"
 
-#include <stdint.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef unsigned __int128 uint128_t;
 
@@ -11,7 +11,7 @@ typedef unsigned __int128 uint128_t;
 inline uint64_t add_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   x += y;
   int64_t maybe = x - p;
-  return maybe < 0 ? x : (uint64_t) maybe;
+  return maybe < 0 ? x : (uint64_t)maybe;
 }
 
 inline uint64_t mul_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
@@ -25,7 +25,8 @@ inline uint64_t pow_mod_u64(uint64_t b, uint64_t e, uint64_t p) {
   assert(e < p);
   uint64_t r = 1;
   while (e) {
-    if (e & 1) r = mul_mod_u64(r, b, p);
+    if (e & 1)
+      r = mul_mod_u64(r, b, p);
     b = mul_mod_u64(b, b, p);
     e >>= 1;
   }
@@ -50,16 +51,18 @@ inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
   uint128_t u = t + (uint128_t)m * p;
   uint64_t res = u >> 64;
   int64_t maybe = res - p;
-  return maybe < 0 ? res : (uint64_t) maybe;
+  return maybe < 0 ? res : (uint64_t)maybe;
 }
 
 inline uint64_t sub_mod_u64(uint64_t x, uint64_t y, uint64_t p) {
   return (x >= y) ? x - y : x + p - y;
 }
 
-// Pass `r` (montomery 1) into acc for regular power. If you're just going to multiply
-// your power into another number you can put that into acc instead to save a multiply
-inline uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint64_t p_dash) {
+// Pass `r` (montomery 1) into acc for regular power. If you're just going to
+// multiply your power into another number you can put that into acc instead to
+// save a multiply
+inline uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p,
+                         uint64_t p_dash) {
   // Compute by repeated squaring
   while (e) {
     if (e & 1)
@@ -70,8 +73,7 @@ inline uint64_t mont_pow(uint64_t b, uint64_t e, uint64_t acc, uint64_t p, uint6
   return acc;
 }
 
-inline uint64_t extended_euclidean(uint64_t a, uint64_t b)
-{
+inline uint64_t extended_euclidean(uint64_t a, uint64_t b) {
   uint64_t r0 = a;
   uint64_t r1 = b;
   uint64_t s0 = 1;
@@ -84,44 +86,47 @@ inline uint64_t extended_euclidean(uint64_t a, uint64_t b)
     spare = r0 % r1;
     r0 = r1;
     r1 = spare;
-    spare = s0+q*s1;
+    spare = s0 + q * s1;
     s0 = s1;
     s1 = spare;
     ++n;
   }
   // gcd = r0
-  if (n%2) s0=b-s0;
+  if (n % 2)
+    s0 = b - s0;
   return s0;
 }
 
 #if !SLOW_DIVISION
-#  define mont_inv(w,x,y,z) mont_inv_act((w),(x),(y),(z))
+#define mont_inv(w, x, y, z) mont_inv_act((w), (x), (y), (z))
 
-inline uint64_t mont_inv_act(uint64_t x, uint64_t r3, uint64_t p, uint64_t p_dash) {
+inline uint64_t mont_inv_act(uint64_t x, uint64_t r3, uint64_t p,
+                             uint64_t p_dash) {
   uint64_t inv = extended_euclidean(x, p);
-  // inv gives us a value when multiplied gives 1, for a number that when mont mulled gives 1 
-  // we need to times by r. For a number that when mont mulled gives r we need to times by r2
-  // timesing by r2 is the same as mont mulling by r3
+  // inv gives us a value when multiplied gives 1, for a number that when mont
+  // mulled gives 1 we need to times by r. For a number that when mont mulled
+  // gives r we need to times by r2 timesing by r2 is the same as mont mulling
+  // by r3
   return mont_mul(r3, inv, p, p_dash);
 }
 
 #else
-#  define mont_inv(w,x,y,z) mont_inv_act((w),(y),(z))
+#define mont_inv(w, x, y, z) mont_inv_act((w), (y), (z))
 
 inline uint64_t mont_inv_act(uint64_t x, uint64_t p, uint64_t p_dash) {
-  return mont_pow(x, p-3, x, p, p_dash);
+  return mont_pow(x, p - 3, x, p, p_dash);
 }
 
 #endif
 
-
 // Does a1 * b1 - a2 * b2
-inline uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2, uint64_t p, uint64_t p_dash) {
+inline uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2,
+                             uint64_t p, uint64_t p_dash) {
   uint128_t t1 = (uint128_t)a1 * b1;
   uint128_t t2 = (uint128_t)a2 * b2;
   uint128_t t = t1 + ((uint128_t)p << 64) - t2;
   uint64_t m = (uint64_t)t * p_dash;
   uint64_t u = (t + (uint128_t)m * p) >> 64;
   int64_t maybe = u - p;
-  return maybe < 0 ? u : (uint64_t) maybe;
+  return maybe < 0 ? u : (uint64_t)maybe;
 }

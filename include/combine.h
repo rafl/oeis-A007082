@@ -5,7 +5,9 @@
 
 // TODO: make opaue and provide accessors, avoiding exposure of gmp?
 #include <gmp.h>
-typedef struct { mpz_t X, M; } comb_ctx_t;
+typedef struct {
+  mpz_t X, M;
+} comb_ctx_t;
 
 comb_ctx_t *comb_ctx_new();
 void comb_ctx_free(comb_ctx_t *);

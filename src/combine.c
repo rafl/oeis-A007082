@@ -1,8 +1,8 @@
-#include "debug.h"
 #include "combine.h"
+#include "debug.h"
 
-#include <stdlib.h>
 #include <gmp.h>
+#include <stdlib.h>
 
 comb_ctx_t *comb_ctx_new() {
   comb_ctx_t *ctx = malloc(sizeof(comb_ctx_t));
