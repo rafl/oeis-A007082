@@ -182,7 +182,11 @@ __device__ uint64_t d_det_mod_p(uint64_t *A, size_t dim, uint64_t r,
 __device__ uint64_t d_f_fst_trm(const size_t *c, uint64_t m, uint64_t m_half,
                                 const uint64_t *jk_sums_M, const uint64_t *rs,
                                 uint64_t p, uint64_t p_dash) {
-  if (m > MAX_M) return 0; // Safety check
+  // Safety check
+  if (m > MAX_M) {
+    printf("ERR: m=%lu > MAX_M=%d\n", m, MAX_M);
+    return 0;
+  }
 
   uint64_t pows[MAX_M];
   for (size_t i = 0; i < m; ++i)
@@ -222,7 +226,11 @@ __device__ uint64_t d_f_snd_trm(const size_t *c, uint64_t m,
                                 const uint64_t *nat_M, const uint64_t *nat_inv_M,
                                 uint64_t r, uint64_t r3, uint64_t p,
                                 uint64_t p_dash) {
-  if (m > MAX_M) return 0; // Safety check
+  // Safety check
+  if (m > MAX_M) {
+    printf("ERR: m=%lu > MAX_M=%d\n", m, MAX_M);
+    return 0;
+  }
 
   size_t typ[MAX_M];
   size_t r_cnt = 0;
@@ -256,7 +264,11 @@ __device__ uint64_t d_f_snd_trm(const size_t *c, uint64_t m,
   if (!dim)
     return prod_M;
 
-  if (dim > MAX_M) return 0; // Safety check
+  // Safety check
+  if (dim > MAX_M) {
+    printf("ERR: dim=%lu > MAX_M=%d\n", dim, MAX_M);
+    return 0;
+  }
 
   uint64_t A[MAX_M * MAX_M];
   for (size_t a = 1; a < r_cnt; ++a) {
@@ -298,7 +310,11 @@ __device__ uint64_t d_jack_snd_trm(const size_t *c, uint64_t m,
                                    const uint64_t *jk_prod_M,
                                    const uint64_t *nat_M, uint64_t r,
                                    uint64_t r3, uint64_t p, uint64_t p_dash) {
-  if (m > MAX_M) return 0; // Safety check
+  // Safety check
+  if (m > MAX_M) {
+    printf("ERR: m=%lu > MAX_M=%d\n", m, MAX_M);
+    return 0;
+  }
 
   size_t typ[MAX_M];
   size_t r_cnt = 0;
@@ -325,7 +341,11 @@ __device__ uint64_t d_jack_snd_trm(const size_t *c, uint64_t m,
   if (r_cnt <= 1)
     return prod_M;
 
-  if (r_cnt > MAX_M) return 0; // Safety check
+  // Safety check
+  if (r_cnt > MAX_M) {
+    printf("ERR: r_cnt=%lu > MAX_M=%d\n", r_cnt, MAX_M);
+    return 0;
+  }
 
   uint64_t A[MAX_M * MAX_M];
   for (size_t a = 0; a < r_cnt; ++a) {
