@@ -105,11 +105,11 @@ pgo-clean:
 	@rm -rf $(PGO_DIR)
 
 test: oeis
+ifeq ($(USE_GPU),1)
+	@bash test.sh --gpu $(N)
+else
 	@bash test.sh $(N)
-
-test-gpu: USE_GPU=1
-test-gpu: clean oeis
-	@bash test.sh $(N)
+endif
 
 fmt:
 	bash -c 'shopt -s globstar; clang-format -i -- src/**.c include/**.h'

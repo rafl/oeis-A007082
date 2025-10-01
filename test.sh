@@ -3,7 +3,15 @@
 set -euo pipefail
 
 BFILE='b007082.txt'
+GPU_FLAG=""
 MAX_N="${1:-7}"
+
+# Check if --gpu flag is provided
+if [[ "${1:-}" == "--gpu" ]]; then
+  GPU_FLAG="--gpu"
+  MAX_N="${2:-7}"
+fi
+
 fail=0
 
 declare -a VAL
@@ -25,7 +33,7 @@ function run_test() {
   fi
 
   start=$(date +%s.%N)
-  got="$(./oeis -q $args "$k")"
+  got="$(./oeis -q $GPU_FLAG $args "$k")"
   end=$(date +%s.%N)
 
   dur=$(awk -v s="$start" -v e="$end" 'BEGIN {printf "%.3f", (e-s)}')
@@ -45,7 +53,8 @@ function run_test() {
 
 for (( n = 1; n <= MAX_N; n++ )); do
   run_test "$n" ""
-  if (( $n > 1 && $n % 2 )); then
+  # Jack modes not yet implemented for GPU
+  if (( $n > 1 && $n % 2 )) && [[ -z "$GPU_FLAG" ]]; then
     run_test "$n" "--jack both"
   fi
 done
