@@ -175,11 +175,16 @@ __device__ uint64_t d_det_mod_p(uint64_t *A, size_t dim, uint64_t r,
   return d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
 }
 
+// Maximum m value we support (for stack allocation safety)
+#define MAX_M 64
+
 // f_fst_trm calculation
 __device__ uint64_t d_f_fst_trm(const size_t *c, uint64_t m, uint64_t m_half,
                                 const uint64_t *jk_sums_M, const uint64_t *rs,
                                 uint64_t p, uint64_t p_dash) {
-  uint64_t pows[256]; // Max m assumed to be < 256
+  if (m > MAX_M) return 0; // Safety check
+
+  uint64_t pows[MAX_M];
   for (size_t i = 0; i < m; ++i)
     pows[i] = 0;
 
@@ -217,7 +222,9 @@ __device__ uint64_t d_f_snd_trm(const size_t *c, uint64_t m,
                                 const uint64_t *nat_M, const uint64_t *nat_inv_M,
                                 uint64_t r, uint64_t r3, uint64_t p,
                                 uint64_t p_dash) {
-  size_t typ[256];
+  if (m > MAX_M) return 0; // Safety check
+
+  size_t typ[MAX_M];
   size_t r_cnt = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
@@ -249,7 +256,9 @@ __device__ uint64_t d_f_snd_trm(const size_t *c, uint64_t m,
   if (!dim)
     return prod_M;
 
-  uint64_t A[256 * 256];
+  if (dim > MAX_M) return 0; // Safety check
+
+  uint64_t A[MAX_M * MAX_M];
   for (size_t a = 1; a < r_cnt; ++a) {
     size_t i = typ[a];
     uint64_t W_del = jk_prod_M[m - i];
@@ -289,7 +298,9 @@ __device__ uint64_t d_jack_snd_trm(const size_t *c, uint64_t m,
                                    const uint64_t *jk_prod_M,
                                    const uint64_t *nat_M, uint64_t r,
                                    uint64_t r3, uint64_t p, uint64_t p_dash) {
-  size_t typ[256];
+  if (m > MAX_M) return 0; // Safety check
+
+  size_t typ[MAX_M];
   size_t r_cnt = 0;
   for (size_t i = 0; i < m; ++i) {
     if (c[i]) {
@@ -314,7 +325,9 @@ __device__ uint64_t d_jack_snd_trm(const size_t *c, uint64_t m,
   if (r_cnt <= 1)
     return prod_M;
 
-  uint64_t A[256 * 256];
+  if (r_cnt > MAX_M) return 0; // Safety check
+
+  uint64_t A[MAX_M * MAX_M];
   for (size_t a = 0; a < r_cnt; ++a) {
     size_t i = typ[a];
     uint64_t diag = r;
@@ -465,9 +478,6 @@ bool gpu_available(void) {
 
 gpu_ctx_t *gpu_ctx_new(uint64_t n, uint64_t n_args, uint64_t m, uint64_t p,
                        uint64_t w, bool jack_mode) {
-  printf("DEBUG gpu_ctx_new: n=%lu, n_args=%lu, m=%lu, p=%lu, jack=%d\n",
-         n, n_args, m, p, jack_mode);
-
   gpu_ctx_t *ctx = (gpu_ctx_t *)malloc(sizeof(gpu_ctx_t));
   assert(ctx);
 
@@ -687,9 +697,6 @@ uint64_t gpu_process_batch(gpu_ctx_t *ctx, const size_t *vecs, size_t n_vecs) {
 
   int block_size = 256;
   int num_blocks = (n_vecs + block_size - 1) / block_size;
-
-  printf("DEBUG: Launching kernel with n_vecs=%zu, m=%lu, n=%lu, n_args=%lu\n",
-         n_vecs, ctx->m, ctx->n, ctx->n_args);
 
   compute_kernel<<<num_blocks, block_size>>>(
       d_vecs, n_vecs, d_results, ctx->n, ctx->n_args, ctx->m, ctx->m_half,

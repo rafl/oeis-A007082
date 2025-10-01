@@ -32,11 +32,7 @@ static int gpu_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     return 0;
 
   uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
-
-  printf("DEBUG gpu_next: n=%lu, m=%lu, p=%lu\n", n, m, p);
-
   uint64_t w = mth_root_mod_p(p, m);
-  printf("DEBUG: Found root w=%lu\n", w);
 
   if (!st->quiet)
     printf("GPU processing p=%" PRIu64 "\n", p);
