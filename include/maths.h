@@ -55,31 +55,14 @@ static inline uint64_t inv64_u64(uint64_t p) {
 // }
 
 static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
-  uint64_t result;
-
-        // mov     rax, rdi
-        // mov     r8, rdx
-        // mul     rsi
-        // imul    rcx, rax
-        // mov     rsi, rax
-        // mov     rdi, rdx
-        // mov     rax, rcx
-        // mul     r8
-        // add     rax, rsi
-        // adc     rdx, rdi
-        // mov     rax, rdx
-        // sub     rdx, r8
-        // cmp     rax, r8
-        // cmovnb  rax, rdx
-  
+  uint64_t result; 
     asm (
         ".intel_syntax noprefix\n"
         "mul     %[b]\n"
-        "mov     %%rsi, %%rax\n"
         "mov     %%rdi, %%rdx\n"
         "imul    %%rax, %[p_dash]\n"
         "mul     %[p]\n"
-        "add     %%rax, %%rsi\n"
+        "add     %%rax, -1\n"
         "adc     %%rdx, %%rdi\n"
         "mov     %%rax, %%rdx\n"
         "sub     %%rax, %[p]\n"
