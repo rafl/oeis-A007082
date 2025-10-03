@@ -70,7 +70,7 @@ static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_d
         ".att_syntax prefix\n"
         : "=a"(result)             // output in rax
         : [a]"rax"(a), [b]"r"(b), [p]"r"(p), [p_dash]"r"(p_dash)
-        : "rdx", "rsi", "rdi"
+        : "rdx", "rdi"
     );
 
     return result;
