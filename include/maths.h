@@ -55,8 +55,8 @@ static inline uint64_t inv64_u64(uint64_t p) {
 // }
 
 static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
-  uint64_t result; 
-    asm (
+  uint64_t __volatile__  result; 
+    asm __volatile__ (
         ".intel_syntax noprefix\n"
         "mul     %[b]\n"
         "mov     %%rdi, %%rdx\n"
@@ -68,8 +68,8 @@ static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_d
         "sub     %%rax, %[p]\n"
         "cmovs   %%rax, %%rdx\n"
         ".att_syntax prefix\n"
-        : "=a"(result)             // output in rax
-        : [a]"rax"(a), [b]"r"(b), [p]"r"(p), [p_dash]"r"(p_dash)
+        : "=&a"(result)             // output in rax
+        : [a]"0"(a), [b]"r"(b), [p]"r"(p), [p_dash]"r"(p_dash)
         : "rdx", "rdi"
     );
 
