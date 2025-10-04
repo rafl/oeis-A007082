@@ -71,7 +71,7 @@ static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_d
         ".att_syntax\n"
         : "=a"(result)
         : [a]"0"(a), [b]"r"(b), [p]"r"(p), [p_dash]"r"(p_dash), [working]"r"(scratch)
-        : "rdx", "rdi"
+        : "rdx"
     );
 
     return result;
