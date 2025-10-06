@@ -54,7 +54,7 @@ static inline uint64_t inv64_u64(uint64_t p) {
 //   return maybe < 0 ? res : (uint64_t)maybe;
 // }
 
-uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
+inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
   uint64_t  result;
   uint64_t scratch;
     asm (
