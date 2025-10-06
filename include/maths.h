@@ -54,23 +54,21 @@ static inline uint64_t inv64_u64(uint64_t p) {
 //   return maybe < 0 ? res : (uint64_t)maybe;
 // }
 
-static inline uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
+uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t p, uint64_t p_dash) {
   uint64_t  result;
   uint64_t scratch;
     asm (
-        ".intel_syntax\n"
-        "mul     %[b]\n"
-        "mov     %[working], %%rdx\n"
-        "imul    %%rax, %[p_dash]\n"
-        "mul     %[p]\n"
-        "add     %%rax, -1\n"
-        "adc     %%rdx, %[working]\n"
-        "mov     %%rax, %%rdx\n"
-        "sub     %%rax, %[p]\n"
-        "cmovs   %%rax, %%rdx\n"
-        ".att_syntax\n"
+        "mulq     %[b]\n"
+        "movq     %%rdx, %[scratch]\n"
+        "imulq     %[p_dash], %%rax\n"
+        "mulq     %[p]\n"
+        "addq     $-1, %%rax\n"
+        "adcq     %[scratch], %%rdx\n"
+        "movq     %%rdx, %%rax\n"
+        "subq     %[p], %%rax\n"
+        "cmovsq   %%rdx, %%rax\n"
         : "=a"(result)
-        : [a]"0"(a), [b]"r"(b), [p]"r"(p), [p_dash]"r"(p_dash), [working]"r"(scratch)
+        : [a]"0"(a), [b]"r"(b), [p]"r"(p), [p_dash]"r"(p_dash), [scratch]"r"(scratch)
         : "rdx"
     );
 

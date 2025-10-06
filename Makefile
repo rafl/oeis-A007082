@@ -5,7 +5,7 @@ SLOW_DIVISION := 0
 
 CFLAGS := -g -std=gnu18 -O3 -march=native -flto -Wall -Wextra \
           $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP \
-          -DDEBUG=$(DEBUG) -DSLOW_DIVISION=$(SLOW_DIVISION) -m64
+          -DDEBUG=$(DEBUG) -DSLOW_DIVISION=$(SLOW_DIVISION)
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
 PGO ?= none
