@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bracelet.h"
 #include "mss.h"
 
 #include <pthread.h>
@@ -7,8 +8,8 @@
 #include <stddef.h>
 
 // This is how many calcs per iteration we do
-#define CHUNK (1UL << 17)
-#define Q_CAP 16
+#define CHUNK (1UL << 16)
+#define Q_CAP 1024
 
 // shared over all threads - used to pull the next work task
 
@@ -18,7 +19,7 @@ typedef struct {
   size_t head, tail, cap, m;
   _Atomic size_t fill;
   bool done, pause;
-  canon_iter_t it;
+  bracelet_iter_t it;
   pthread_mutex_t mu;
   pthread_cond_t not_empty, not_full, resume;
 } queue_t;

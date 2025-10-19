@@ -19,25 +19,27 @@ queue_t *queue_new(size_t n_args, size_t m, const void *iter_st, size_t st_len,
   pthread_cond_init(&q->resume, NULL);
   q->scratch = malloc((m + 1) * sizeof(size_t));
   assert(q->scratch);
-  if (st_len)
-    canon_iter_resume(&q->it, m, n_args, q->scratch, iter_st, st_len);
-  else
-    canon_iter_new(&q->it, m, n_args, q->scratch);
+  if (st_len) {
+    assert(0 && "Snapshot resume not supported for bracelets yet");
+  } else {
+    bracelet_iter_new(&q->it, m, n_args, q->scratch);
+  }
   q->vecs = vecs;
-  q->buf = &vecs[CHUNK * m];
+  q->buf = &vecs[CHUNK * (m + 1)];
 
   return q;
 }
 
 size_t queue_save(queue_t *q, void *buf, size_t len) {
-  return canon_iter_save(&q->it, buf, len);
+  assert(0 && "Snapshot not supported for bracelets yet");
+  return 0;
 }
 
 void queue_free(queue_t *q) { free(q->scratch); }
 
 static inline void queue_push(queue_t *restrict q, const size_t *vecs,
                               size_t n_vec) {
-  size_t m = q->m;
+  size_t vec_size = q->m + 1;
   pthread_mutex_lock(&q->mu);
 
   while (q->fill + n_vec > q->cap)
@@ -46,10 +48,11 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
   size_t spc = q->cap - q->tail;
   size_t fst = (n_vec <= spc) ? n_vec : spc;
 
-  memcpy(&q->buf[q->tail * m], vecs, fst * m * sizeof(size_t));
+  memcpy(&q->buf[q->tail * vec_size], vecs, fst * vec_size * sizeof(size_t));
 
   if (fst < n_vec)
-    memcpy(q->buf, &vecs[fst * m], (n_vec - fst) * m * sizeof(size_t));
+    memcpy(q->buf, &vecs[fst * vec_size],
+           (n_vec - fst) * vec_size * sizeof(size_t));
 
   q->tail = (q->tail + n_vec) % q->cap;
   q->fill += n_vec;
@@ -63,7 +66,7 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
 }
 
 size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
-  size_t m = q->m;
+  size_t vec_size = q->m + 1;
   pthread_mutex_lock(&q->mu);
 
   while (q->fill == 0 && !q->done) {
@@ -82,9 +85,10 @@ size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
   size_t spc = q->cap - q->head;
   size_t fst = n_vec <= spc ? n_vec : spc;
 
-  memcpy(out, &q->buf[q->head * m], fst * m * sizeof(size_t));
+  memcpy(out, &q->buf[q->head * vec_size], fst * vec_size * sizeof(size_t));
   if (fst < n_vec)
-    memcpy(out + fst * m, q->buf, (n_vec - fst) * m * sizeof(size_t));
+    memcpy(out + fst * vec_size, q->buf,
+           (n_vec - fst) * vec_size * sizeof(size_t));
 
   q->head = (q->head + n_vec) % q->cap;
   q->fill -= n_vec;
@@ -96,10 +100,11 @@ size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
 }
 
 void queue_fill(queue_t *restrict q) {
+  size_t vec_size = q->m + 1;
   for (;;) {
     size_t n_vec = 0;
     for (; n_vec < CHUNK; ++n_vec) {
-      if (!canon_iter_next(&q->it, &q->vecs[n_vec * q->m]))
+      if (!bracelet_iter_next(&q->it, &q->vecs[n_vec * vec_size]))
         break;
     }
 

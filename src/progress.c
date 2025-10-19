@@ -11,7 +11,7 @@
 #endif
 
 #define PROG_INT 1
-#define PROG_RATE_TAU 60.0
+#define PROG_RATE_TAU 3.0
 
 static void *progress(void *_ud) {
   progress_st_t *ud = _ud;

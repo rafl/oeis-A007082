@@ -420,34 +420,45 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   return acc;
 }
 
-static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p,
-                  ctx->p_dash);
+static inline void mk_refl(const uint64_t *vec, uint64_t *refl, size_t m) {
+  refl[0] = vec[0];
+  for (size_t i = 1; i < m; ++i) {
+    refl[i] = vec[m - i];
+  }
 }
 
-static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
+static uint64_t jack(bool chiral, uint64_t *vec, const prim_ctx_t *ctx) {
   uint64_t const m = ctx->m, p = ctx->p;
   uint64_t ret = 0;
-  uint64_t f_0 = jack_offset(vec, ctx);
+  uint64_t f_fst = f_fst_trm(vec, ctx);
   uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+  for (size_t c = 0; c <= chiral ? 1 : 0; ++c) {
+    uint64_t refl[m];
+    if (c) {
+      mk_refl(vec, refl, m);
+      vec = refl;
+    }
+    uint64_t f_0 = mont_mul(f_fst, jack_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 
-  // Loop over each "rotation" of the vector of argument multiplicities. This is
-  // equivilent to multiplying all the coefficients by w
-  for (size_t r = 0; r < m; ++r) {
-    // We require there always be at least one "1" in the arguments to f() (per
-    // the paper) that is to say if the multiplicty of "1" arguments is zero -
-    // we should skip this case
-    if (vec[r] == 0)
-      continue;
+    // Loop over each "rotation" of the vector of argument multiplicities. This
+    // is equivilent to multiplying all the coefficients by w
+    for (size_t r = 0; r < m; ++r) {
+      // We require there always be at least one "1" in the arguments to f()
+      // (per the paper) that is to say if the multiplicty of "1" arguments is
+      // zero - we should skip this case
+      if (vec[r] == 0)
+        continue;
 
-    // The multinomial coefficient would be constant over all "rotations" of the
-    // multiplicities but because we're assuming at least one argument is always
-    // "1" which requires us to subtract 1 from the first multiplicity. Rather
-    // than recompute the full coeff each time we can take a baseline
-    // "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
-    size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
-    uint64_t f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
-    ret = add_mod_u64(ret, f_n, p);
+      // The multinomial coefficient would be constant over all "rotations" of
+      // the multiplicities but because we're assuming at least one argument is
+      // always "1" which requires us to subtract 1 from the first multiplicity.
+      // Rather than recompute the full coeff each time we can take a baseline
+      // "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
+      size_t coeff =
+          mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+      uint64_t f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
+      ret = add_mod_u64(ret, f_n, p);
+    }
   }
 
   ret = mont_mul(ret, ctx->nat_M[ctx->n - 1], ctx->p, ctx->p_dash);
@@ -559,41 +570,46 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
-  return mont_mul(f_fst_trm(vec, ctx), f_snd_trm(vec, ctx), ctx->p,
-                  ctx->p_dash);
-}
-
-static uint64_t david(uint64_t *vec, const prim_ctx_t *ctx) {
+static uint64_t david(bool chiral, uint64_t *vec, const prim_ctx_t *ctx) {
   uint64_t const m = ctx->m, p = ctx->p;
-  uint64_t ret = 0, f_0 = f(vec, ctx);
+  uint64_t ret = 0;
+  uint64_t const f_fst = f_fst_trm(vec, ctx);
   uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+  for (size_t c = 0; c <= chiral ? 1 : 0; ++c) {
+    uint64_t refl[m];
+    if (c) {
+      mk_refl(vec, refl, m);
+      vec = refl;
+    }
+    uint64_t f_0 = mont_mul(f_fst, f_snd_trm(vec, ctx), ctx->p, ctx->p_dash);
 
-  // Loop over each "rotation" of the vector of argument multiplicities. This is
-  // equivilent to multiplying all the coefficients by w
-  for (size_t r = 0; r < m; ++r) {
-    // We require there always be at least one "1" in the arguments to f() (per
-    // the paper) that is to say if the multiplicty of "1" arguments is zero -
-    // we should skip this case
-    if (vec[r] == 0)
-      continue;
+    // Loop over each "rotation" of the vector of argument multiplicities. This
+    // is equivilent to multiplying all the coefficients by w
+    for (size_t r = 0; r < m; ++r) {
+      // We require there always be at least one "1" in the arguments to f()
+      // (per the paper) that is to say if the multiplicty of "1" arguments is
+      // zero - we should skip this case
+      if (vec[r] == 0)
+        continue;
 
-    // The multinomial coefficient would be constant over all "rotations" of the
-    // multiplicities but because we're assuming at least one argument is always
-    // "1" which requires us to subtract 1 from the first multiplicity. Rather
-    // than recompute the full coeff each time we can take a baseline
-    // "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
-    size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+      // The multinomial coefficient would be constant over all "rotations" of
+      // the multiplicities but because we're assuming at least one argument is
+      // always "1" which requires us to subtract 1 from the first multiplicity.
+      // Rather than recompute the full coeff each time we can take a baseline
+      // "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
+      size_t coeff =
+          mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
 
-    size_t idx = (2 * r) % m;
-    // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
-    // This result comes from having to permute one of the ones from one of the
-    // first n-1 args into the nth arg See the paper for more info
-    uint64_t f_n = mont_mul(
-        coeff, mont_mul(f_0, ctx->ws_M[idx ? m - idx : 0], p, ctx->p_dash), p,
-        ctx->p_dash);
+      size_t idx = (2 * r) % m;
+      // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
+      // This result comes from having to permute one of the ones from one of
+      // the first n-1 args into the nth arg See the paper for more info
+      uint64_t f_n = mont_mul(
+          coeff, mont_mul(f_0, ctx->ws_M[idx ? m - idx : 0], p, ctx->p_dash), p,
+          ctx->p_dash);
 
-    ret = add_mod_u64(ret, f_n, p);
+      ret = add_mod_u64(ret, f_n, p);
+    }
   }
 
   return ret;
@@ -613,8 +629,10 @@ typedef struct {
   size_t n_thrds; /*number of threads*/
 } proc_state_t;
 
+typedef uint64_t (*f_t)(bool, uint64_t *, const prim_ctx_t *);
+
 typedef struct {
-  uint64_t (*f)(uint64_t *, const prim_ctx_t *);
+  f_t f;
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
   queue_t *q;
@@ -642,7 +660,7 @@ static resume_cb_t w_idle(void *ud) {
 // thread function for doing work on the "maths stuff"
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
-  uint64_t (*f)(uint64_t *, const prim_ctx_t *) = worker->f;
+  uint64_t (*f)(bool, uint64_t *, const prim_ctx_t *) = worker->f;
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t m = ctx->m, p = ctx->p,
            l_acc = 0; // l_acc is where we're going to accumulate the total
@@ -655,14 +673,16 @@ static void *residue_for_prime(void *ud) {
     if (!n_vec)
       break;
 
+    size_t necklaces = 0;
     for (size_t c = 0; c < n_vec; ++c) {
-      // each vector has len m
-      // each vector contains the multiplicity with which each power of omega
-      // appears in the args i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of
-      // w^2
-      l_acc = add_mod_u64(l_acc, f(&vecs[c * m], ctx), p);
+      size_t vec_offset = c * (m + 1);
+      bool chiral = vecs[vec_offset] != 0;
+      uint64_t *bracelet = (uint64_t *)&vecs[vec_offset + 1];
+
+      l_acc = add_mod_u64(l_acc, f(chiral, bracelet, ctx), p);
+      necklaces += chiral ? 2 : 1;
     }
-    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+    atomic_fetch_add_explicit(worker->done, necklaces, memory_order_relaxed);
   }
 
   (void)w_idle(worker);
@@ -725,7 +745,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   // shared work queue
   queue_t *q = queue_new(st->n_args, m, iter_st, st_len,
-                         &st->vecss[st->n_thrds * CHUNK * m]);
+                         &st->vecss[st->n_thrds * CHUNK * (m + 1)]);
 
   progress_t prog;
   // progress bar stuff
@@ -737,14 +757,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   worker_t w_ctxs[st->n_thrds];
   bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
-  uint64_t (*fn)(uint64_t *, const prim_ctx_t *) =
-      st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
+  f_t fn = st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){.ctx = ctx,
                            .f = fn,
                            .done = &done,
                            .q = q,
-                           .vecs = &st->vecss[i * CHUNK * m],
+                           .vecs = &st->vecss[i * CHUNK * (m + 1)],
                            .idle = false,
                            .acc = &acc,
                            .acc_mu = &acc_mu};
@@ -808,7 +827,7 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
   size_t n_thrds = get_num_threads();
   bool borrowed = vecss;
   if (!vecss) {
-    vecss = malloc(CHUNK * m * (n_thrds + 1 + Q_CAP) * sizeof(size_t));
+    vecss = malloc(CHUNK * (m + 1) * (n_thrds + 1 + Q_CAP) * sizeof(size_t));
     assert(vecss);
   }
   *st = (proc_state_t){.mode = mode,
