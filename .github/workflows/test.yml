@@ -30,10 +30,6 @@ jobs:
         run: |
           brew update
           brew install llvm libomp
-      - name: Build
-        run: make
-        env:
-          CC: ${{ matrix.compiler }}
       - name: Run test suite
         run: make test N=11 SLOW_DIVISION=${{ matrix.slow_division }}
         env:
