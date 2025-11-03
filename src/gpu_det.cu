@@ -546,6 +546,7 @@ struct vec_batch_t {
   // Batch parameters
   size_t max_vecs;
   size_t count;
+  uint64_t n;  // For nat_M sizing
   uint64_t m;
   bool is_jack_mode;
 
@@ -553,7 +554,7 @@ struct vec_batch_t {
   uint64_t p, p_dash, r, r3;
 };
 
-vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t m, uint64_t p,
+vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t m, uint64_t p,
                             uint64_t p_dash, uint64_t r, uint64_t r3,
                             const uint64_t *jk_prod_M, const uint64_t *nat_M,
                             const uint64_t *nat_inv_M, bool is_jack_mode) {
@@ -562,6 +563,7 @@ vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t m, uint64_t p,
 
   batch->max_vecs = max_vecs;
   batch->count = 0;
+  batch->n = n;
   batch->m = m;
   batch->p = p;
   batch->p_dash = p_dash;
@@ -577,9 +579,9 @@ vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t m, uint64_t p,
   // Allocate device memory
   CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * m * sizeof(uint64_t)));
   CUDA_CHECK(cudaMalloc(&batch->d_jk_prod_M, m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_nat_M, (m + 1) * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_nat_M, (n + 1) * sizeof(uint64_t)));  // FIX: n not m!
   if (!is_jack_mode) {
-    CUDA_CHECK(cudaMalloc(&batch->d_nat_inv_M, (m + 1) * sizeof(uint64_t)));
+    CUDA_CHECK(cudaMalloc(&batch->d_nat_inv_M, (n + 1) * sizeof(uint64_t)));  // FIX: n not m!
   } else {
     batch->d_nat_inv_M = NULL;
   }
@@ -588,11 +590,11 @@ vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t m, uint64_t p,
   // Copy constant data to device
   CUDA_CHECK(cudaMemcpy(batch->d_jk_prod_M, jk_prod_M, m * sizeof(uint64_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_nat_M, nat_M, (m + 1) * sizeof(uint64_t),
+  CUDA_CHECK(cudaMemcpy(batch->d_nat_M, nat_M, (n + 1) * sizeof(uint64_t),  // FIX: n not m!
                         cudaMemcpyHostToDevice));
   if (!is_jack_mode) {
     CUDA_CHECK(cudaMemcpy(batch->d_nat_inv_M, nat_inv_M,
-                          (m + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
+                          (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));  // FIX: n not m!
   }
 
   return batch;

@@ -18,7 +18,7 @@ typedef struct vec_batch_t vec_batch_t;
 // === Vector-based API (builds matrices on GPU, much faster) ===
 
 // Create a vector batch for processing coefficient vectors on GPU
-vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t m, uint64_t p,
+vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t m, uint64_t p,
                             uint64_t p_dash, uint64_t r, uint64_t r3,
                             const uint64_t *jk_prod_M, const uint64_t *nat_M,
                             const uint64_t *nat_inv_M, bool is_jack_mode);
