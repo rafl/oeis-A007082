@@ -7,6 +7,10 @@
 #include "queue.h"
 #include "snapshot.h"
 
+#ifdef USE_GPU
+#include "gpu_det.h"
+#endif
+
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -599,6 +603,135 @@ static uint64_t david(uint64_t *vec, const prim_ctx_t *ctx) {
   return ret;
 }
 
+#ifdef USE_GPU
+// Structure to hold intermediate results for GPU batching
+typedef struct {
+  uint64_t f_fst_result;  // Result from f_fst_trm
+  uint64_t f_0_partial;   // Partial f_0 result (before det)
+  uint64_t coeff_baseline;
+  size_t det_idx;  // Index in the determinant batch
+  bool needs_det;  // Whether this vector needs a determinant computation
+} gpu_vec_state_t;
+
+// Build matrix for f_snd_trm, return dimension and prod_M
+// Matrix A should be pre-allocated with size at least max_dim^2
+static size_t f_snd_trm_build_matrix(uint64_t *c, const prim_ctx_t *ctx,
+                                      uint64_t *A, uint64_t *prod_M_out) {
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  size_t typ[m];
+  size_t r = 0;
+  for (size_t i = 0; i < m; ++i) {
+    if (c[i]) {
+      typ[r] = i;
+      ++r;
+    }
+  }
+
+  uint64_t prod_M = ctx->r;
+
+  for (size_t a = 0; a < r; ++a) {
+    size_t i = typ[a];
+    if (c[i] == 1)
+      continue;
+
+    uint64_t sum = 0;
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+      uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
+      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash), p);
+    }
+
+    prod_M = mont_pow(sum, c[i] - 1, prod_M, p, ctx->p_dash);
+  }
+
+  prod_M = mont_mul(prod_M, ctx->nat_inv_M[c[0]], p, ctx->p_dash);
+  size_t dim = r - 1;
+
+  if (dim == 0) {
+    *prod_M_out = prod_M;
+    return 0; // No matrix needed
+  }
+
+  for (size_t a = 1; a < r; ++a) {
+    size_t i = typ[a];
+    uint64_t W_del = ctx->jk_prod_M[m - i];
+    uint64_t diag = mont_mul(ctx->nat_M[c[0]], W_del, p, ctx->p_dash);
+
+    for (size_t b = 1; b < r; ++b) {
+      size_t j = typ[b];
+      if (j == i)
+        continue;
+
+      uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
+      uint64_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
+      A[(a - 1) * dim + (b - 1)] = p - v;
+      diag = add_mod_u64(diag, v, p);
+    }
+
+    A[(a - 1) * dim + (a - 1)] = diag;
+  }
+
+  *prod_M_out = prod_M;
+  return dim;
+}
+
+// Similar for jack_snd_trm
+static size_t jack_snd_trm_build_matrix(uint64_t *c, const prim_ctx_t *ctx,
+                                         uint64_t *A, uint64_t *prod_M_out) {
+  const uint64_t p = ctx->p, m = ctx->m;
+
+  size_t typ[m];
+  size_t r = 0;
+  for (size_t i = 0; i < m; ++i) {
+    if (c[i]) {
+      typ[r] = i;
+      ++r;
+    }
+  }
+
+  uint64_t prod_M = ctx->r;
+
+  for (size_t a = 0; a < r; ++a) {
+    size_t i = typ[a];
+    uint64_t sum = ctx->r;
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
+    }
+    prod_M = mont_pow(sum, c[i] - 1, prod_M, p, ctx->p_dash);
+  }
+
+  if (r <= 1) {
+    *prod_M_out = prod_M;
+    return 0;
+  }
+
+  size_t dim = r;
+  for (size_t a = 0; a < r; ++a) {
+    size_t i = typ[a];
+    uint64_t diag = ctx->r;
+
+    for (size_t b = 0; b < r; ++b) {
+      size_t j = typ[b];
+      if (j == i)
+        continue;
+
+      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
+      A[(a)*dim + (b)] = p - v;
+      diag = add_mod_u64(diag, v, p);
+    }
+
+    A[(a)*dim + (a)] = diag;
+  }
+
+  *prod_M_out = prod_M;
+  return dim;
+}
+#endif
+
 // state of whole process (shared over threads)
 typedef struct {
   process_mode_t mode;
@@ -668,6 +801,122 @@ static void *residue_for_prime(void *ud) {
   (void)w_idle(worker);
   return NULL;
 }
+
+#ifdef USE_GPU
+// GPU-accelerated worker with batched determinant computation
+static void *residue_for_prime_gpu(void *ud) {
+  worker_t *worker = ud;
+  const prim_ctx_t *ctx = worker->ctx;
+  uint64_t m = ctx->m, p = ctx->p, l_acc = 0;
+  size_t *vecs = worker->vecs;
+  worker->l_acc = &l_acc;
+
+  // Determine max matrix dimension (can be at most m)
+  size_t max_dim = m;
+
+  // Create GPU batch - sized for CHUNK vectors (each might have 1-2 matrices)
+  det_batch_t *batch =
+      det_batch_new(CHUNK * 2, max_dim, ctx->p, ctx->p_dash, ctx->r, ctx->r3);
+
+  // Storage for intermediate state and matrices
+  gpu_vec_state_t *vec_states = malloc(CHUNK * sizeof(gpu_vec_state_t));
+  uint64_t *temp_matrix = malloc(max_dim * max_dim * sizeof(uint64_t));
+
+  for (;;) {
+    size_t n_vec = queue_pop(worker->q, vecs, w_idle, worker);
+    if (!n_vec)
+      break;
+
+    det_batch_clear(batch);
+
+    // Phase 1: Build all matrices and collect intermediate state
+    for (size_t c = 0; c < n_vec; ++c) {
+      uint64_t *vec = &vecs[c * m];
+      gpu_vec_state_t *state = &vec_states[c];
+
+      // Compute f_fst_trm (doesn't need determinant)
+      state->f_fst_result = f_fst_trm(vec, ctx);
+
+      // Build matrix for f_snd_trm
+      uint64_t prod_M;
+      size_t dim =
+          (worker->f == david)
+              ? f_snd_trm_build_matrix(vec, ctx, temp_matrix, &prod_M)
+              : jack_snd_trm_build_matrix(vec, ctx, temp_matrix, &prod_M);
+
+      if (dim > 0) {
+        // Add matrix to batch
+        state->det_idx = det_batch_add(batch, temp_matrix, dim, prod_M);
+        state->needs_det = true;
+      } else {
+        // No determinant needed (dim == 0 case)
+        state->f_0_partial = prod_M;
+        state->needs_det = false;
+      }
+
+      state->coeff_baseline = multinomial_mod_p(ctx, vec, m);
+    }
+
+    // Phase 2: Batch compute all determinants on GPU
+    det_batch_compute(batch);
+
+    // Phase 3: Complete calculations and accumulate results
+    for (size_t c = 0; c < n_vec; ++c) {
+      uint64_t *vec = &vecs[c * m];
+      gpu_vec_state_t *state = &vec_states[c];
+
+      // Get determinant result (or use prod_M if no det was needed)
+      uint64_t f_snd_result = state->needs_det
+                                  ? det_batch_get(batch, state->det_idx)
+                                  : state->f_0_partial;
+
+      // Complete f() calculation
+      uint64_t f_0 = mont_mul(state->f_fst_result, f_snd_result, p, ctx->p_dash);
+
+      // Now compute david() or jack() using f_0
+      uint64_t ret = 0;
+      for (size_t r = 0; r < m; ++r) {
+        if (vec[r] == 0)
+          continue;
+
+        uint64_t coeff =
+            mont_mul(state->coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+
+        uint64_t f_n;
+        if (worker->f == david) {
+          size_t idx = (2 * r) % m;
+          f_n = mont_mul(coeff,
+                         mont_mul(f_0, ctx->ws_M[idx ? m - idx : 0], p,
+                                  ctx->p_dash),
+                         p, ctx->p_dash);
+        } else {
+          // jack mode
+          f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
+        }
+
+        ret = add_mod_u64(ret, f_n, p);
+      }
+
+      // For jack, apply final scaling
+      if (worker->f != david) {
+        ret = mont_mul(ret, ctx->nat_M[ctx->n - 1], p, ctx->p_dash);
+        ret = mont_mul(ret, ctx->nat_M[ctx->n - 1], p, ctx->p_dash);
+      }
+
+      l_acc = add_mod_u64(l_acc, ret, p);
+    }
+
+    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+  }
+
+  free(temp_matrix);
+  free(vec_states);
+  det_batch_free(batch);
+
+  (void)w_idle(worker);
+  return NULL;
+}
+#endif
 
 static size_t get_num_threads() {
   char *env = getenv("OMP_NUM_THREADS");
@@ -739,6 +988,14 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
   uint64_t (*fn)(uint64_t *, const prim_ctx_t *) =
       st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
+
+#ifdef USE_GPU
+  bool use_gpu = gpu_det_available();
+  void *(*worker_fn)(void *) = use_gpu ? residue_for_prime_gpu : residue_for_prime;
+#else
+  void *(*worker_fn)(void *) = residue_for_prime;
+#endif
+
   for (size_t i = 0; i < st->n_thrds; ++i) {
     w_ctxs[i] = (worker_t){.ctx = ctx,
                            .f = fn,
@@ -750,7 +1007,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .acc_mu = &acc_mu};
     idles[i] = &w_ctxs[i].idle;
     // worker threads
-    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
+    pthread_create(&worker[i], NULL, worker_fn, &w_ctxs[i]);
   }
 
   snapshot_t ss;
