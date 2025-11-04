@@ -215,6 +215,8 @@ __device__ size_t d_jack_snd_trm_build_matrix(const uint64_t *c, uint64_t m,
 
 // Combined kernel: builds matrix from coefficient vector AND computes determinant
 // Each thread processes one coefficient vector
+// Template parameter MAX_DIM allows compile-time sizing of local array
+template<int MAX_DIM>
 __global__ void vec_det_kernel(const uint64_t *vecs, size_t n_vecs, uint64_t m,
                                 bool is_jack_mode,
                                 const uint64_t *d_jk_prod_M,
@@ -228,8 +230,8 @@ __global__ void vec_det_kernel(const uint64_t *vecs, size_t n_vecs, uint64_t m,
 
   const uint64_t *c = &vecs[vec_idx * m];
 
-  // Build matrix
-  uint64_t A[32 * 32]; // Support up to 32x32 matrices (8KB per thread)
+  // Build matrix in fast local memory, sized exactly for this m
+  uint64_t A[MAX_DIM * MAX_DIM];
   uint64_t prod_M;
   size_t dim;
 
@@ -625,15 +627,39 @@ void vec_batch_compute(vec_batch_t *batch) {
   float h2d_ms;
   cudaEventElapsedTime(&h2d_ms, start, stop);
 
-  // Launch kernel
+  // Launch kernel with appropriate template parameter based on m
   cudaEventRecord(start);
   int block_size = 256;
   int num_blocks = (batch->count + block_size - 1) / block_size;
 
-  vec_det_kernel<<<num_blocks, block_size>>>(
-      batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
-      batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
-      batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  // Dispatch to kernel with compile-time sized array
+  // m values: 13 (n=23), 17 (n=31), 19 (n=35), 21 (n=41), 23 (n=43), etc.
+  if (batch->m <= 13) {
+    vec_det_kernel<13><<<num_blocks, block_size>>>(
+        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
+        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
+        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  } else if (batch->m <= 17) {
+    vec_det_kernel<17><<<num_blocks, block_size>>>(
+        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
+        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
+        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  } else if (batch->m <= 21) {
+    vec_det_kernel<21><<<num_blocks, block_size>>>(
+        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
+        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
+        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  } else if (batch->m <= 25) {
+    vec_det_kernel<25><<<num_blocks, block_size>>>(
+        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
+        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
+        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  } else {
+    vec_det_kernel<32><<<num_blocks, block_size>>>(
+        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
+        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
+        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  }
 
   CUDA_CHECK(cudaGetLastError());
   CUDA_CHECK(cudaDeviceSynchronize());
@@ -651,14 +677,6 @@ void vec_batch_compute(vec_batch_t *batch) {
   cudaEventSynchronize(stop);
   float d2h_ms;
   cudaEventElapsedTime(&d2h_ms, start, stop);
-
-  static int call_count = 0;
-  if (++call_count <= 3) {
-    printf("VEC GPU batch %d: %zu vecs, H2D: %.2fms, Kernel: %.2fms, D2H: "
-           "%.2fms (%.1fMB)\n",
-           call_count, batch->count, h2d_ms, kernel_ms, d2h_ms,
-           vecs_size / 1e6);
-  }
 
   cudaEventDestroy(start);
   cudaEventDestroy(stop);
