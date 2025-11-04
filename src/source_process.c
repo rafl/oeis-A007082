@@ -861,7 +861,10 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (st->snapshot)
     snapshot_start(&ss, st->mode, n, p, st->n_thrds, q, idles, &done, &acc);
 
-  queue_fill(q);
+  // Use frontier-based parallel generation
+  size_t n_producers = st->n_thrds < 4 ? 1 : 4;
+  size_t depth = 5;
+  queue_fill_parallel(q, n_producers, depth);
 
   for (size_t i = 0; i < st->n_thrds; ++i)
     pthread_join(worker[i], NULL);
