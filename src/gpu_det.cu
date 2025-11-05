@@ -394,6 +394,19 @@ bool gpu_det_available(void) {
   return err == cudaSuccess && device_count > 0;
 }
 
+int gpu_get_device_count(void) {
+  int device_count = 0;
+  cudaError_t err = cudaGetDeviceCount(&device_count);
+  if (err != cudaSuccess) {
+    return 0;
+  }
+  return device_count;
+}
+
+void gpu_set_device(int device_id) {
+  CUDA_CHECK(cudaSetDevice(device_id));
+}
+
 det_batch_t *det_batch_new(size_t max_matrices, size_t max_dim, uint64_t p,
                            uint64_t p_dash, uint64_t r, uint64_t r3) {
   det_batch_t *batch = (det_batch_t *)malloc(sizeof(det_batch_t));

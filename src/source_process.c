@@ -627,6 +627,7 @@ typedef struct {
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
+  int worker_id;  // For multi-GPU assignment
 } worker_t;
 
 static void w_resume(void *ud) {
@@ -682,6 +683,17 @@ static void *residue_for_prime_gpu(void *ud) {
   uint64_t m = ctx->m, p = ctx->p, l_acc = 0;
   size_t *vecs = worker->vecs;
   worker->l_acc = &l_acc;
+
+  // Assign this worker to a GPU (round-robin across available devices)
+  // With multiple GPUs, workers are distributed evenly:
+  //   - Worker 0, 2, 4, ... -> GPU 0
+  //   - Worker 1, 3, 5, ... -> GPU 1 (if available)
+  // This maximizes GPU utilization across all available devices.
+  int gpu_count = gpu_get_device_count();
+  if (gpu_count > 1) {
+    int gpu_id = worker->worker_id % gpu_count;
+    gpu_set_device(gpu_id);
+  }
 
   // Determine if we're in jack mode
   bool is_jack_mode = (worker->f != david);
@@ -839,6 +851,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 #ifdef USE_GPU
   bool use_gpu = gpu_det_available();
   void *(*worker_fn)(void *) = use_gpu ? residue_for_prime_gpu : residue_for_prime;
+
+  if (use_gpu && !st->quiet) {
+    int gpu_count = gpu_get_device_count();
+    if (gpu_count > 1) {
+      fprintf(stderr, "Using %d GPUs with %zu worker threads\n", gpu_count, st->n_thrds);
+    }
+  }
 #else
   void *(*worker_fn)(void *) = residue_for_prime;
 #endif
@@ -851,7 +870,8 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .vecs = &st->vecss[i * CHUNK * m],
                            .idle = false,
                            .acc = &acc,
-                           .acc_mu = &acc_mu};
+                           .acc_mu = &acc_mu,
+                           .worker_id = (int)i};
     idles[i] = &w_ctxs[i].idle;
     // worker threads
     pthread_create(&worker[i], NULL, worker_fn, &w_ctxs[i]);

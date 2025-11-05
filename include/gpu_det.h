@@ -11,6 +11,12 @@ extern "C" {
 // Check if CUDA is available at runtime
 bool gpu_det_available(void);
 
+// Get number of available CUDA devices
+int gpu_get_device_count(void);
+
+// Set current CUDA device for this thread
+void gpu_set_device(int device_id);
+
 // Opaque batch structure
 typedef struct det_batch_t det_batch_t;
 typedef struct vec_batch_t vec_batch_t;
