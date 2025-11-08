@@ -30,6 +30,7 @@ queue_t *queue_new(size_t n, size_t m, const void *iter_st, size_t st_len,
                    size_t *vecs);
 void queue_free(queue_t *);
 void queue_fill(queue_t *);
+void queue_fill_parallel(queue_t *, size_t n_threads, size_t depth);
 size_t queue_pop(queue_t *, size_t *, idle_cb_t, void *);
 
 size_t queue_save(queue_t *it, void *buf, size_t len);
