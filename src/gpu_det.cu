@@ -533,8 +533,11 @@ void det_batch_free(det_batch_t *batch) {
 // Vector-based batch API (builds matrices on GPU)
 // ============================================================================
 
+// Number of CUDA streams for pipelining
+#define NUM_STREAMS 4
+
 struct vec_batch_t {
-  // Host data
+  // Host data (pinned for async transfers)
   uint64_t *h_vecs;    // max_vecs * m
   uint64_t *h_results; // max_vecs
 
@@ -544,6 +547,9 @@ struct vec_batch_t {
   uint64_t *d_nat_M;
   uint64_t *d_nat_inv_M;
   uint64_t *d_results;
+
+  // CUDA streams for pipelining
+  cudaStream_t streams[NUM_STREAMS];
 
   // Batch parameters
   size_t max_vecs;
@@ -573,10 +579,14 @@ vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t m, uint64_t p,
   batch->r3 = r3;
   batch->is_jack_mode = is_jack_mode;
 
-  // Allocate host memory
-  batch->h_vecs = (uint64_t *)malloc(max_vecs * m * sizeof(uint64_t));
-  batch->h_results = (uint64_t *)malloc(max_vecs * sizeof(uint64_t));
-  assert(batch->h_vecs && batch->h_results);
+  // Allocate pinned host memory for faster async transfers
+  CUDA_CHECK(cudaMallocHost(&batch->h_vecs, max_vecs * m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(uint64_t)));
+
+  // Create CUDA streams for pipelining
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    CUDA_CHECK(cudaStreamCreate(&batch->streams[i]));
+  }
 
   // Allocate device memory
   CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * m * sizeof(uint64_t)));
@@ -609,77 +619,71 @@ size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec) {
   return idx;
 }
 
+// Helper macro to launch appropriate kernel based on m
+#define LAUNCH_KERNEL_ON_STREAM(MAX_DIM, stream, offset, count) \
+  vec_det_kernel<MAX_DIM><<<num_blocks, block_size, 0, stream>>>( \
+      batch->d_vecs + (offset) * batch->m, (count), batch->m, batch->is_jack_mode, \
+      batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M, \
+      batch->d_results + (offset), batch->p, batch->p_dash, batch->r, batch->r3)
+
 void vec_batch_compute(vec_batch_t *batch) {
   if (batch->count == 0)
     return;
 
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-
-  // Copy vectors to device
-  cudaEventRecord(start);
-  size_t vecs_size = batch->count * batch->m * sizeof(uint64_t);
-  CUDA_CHECK(cudaMemcpy(batch->d_vecs, batch->h_vecs, vecs_size,
-                        cudaMemcpyHostToDevice));
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-  float h2d_ms;
-  cudaEventElapsedTime(&h2d_ms, start, stop);
-
-  // Launch kernel with appropriate template parameter based on m
-  cudaEventRecord(start);
+  // Split batch into sub-batches for streaming
+  // Each stream handles one sub-batch, allowing H2D, kernel, and D2H to overlap
+  size_t vecs_per_stream = (batch->count + NUM_STREAMS - 1) / NUM_STREAMS;
   int block_size = 256;
-  int num_blocks = (batch->count + block_size - 1) / block_size;
 
-  // Dispatch to kernel with compile-time sized array
-  // m values: 13 (n=23), 17 (n=31), 19 (n=35), 21 (n=41), 23 (n=43), etc.
-  if (batch->m <= 13) {
-    vec_det_kernel<13><<<num_blocks, block_size>>>(
-        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
-        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
-        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
-  } else if (batch->m <= 17) {
-    vec_det_kernel<17><<<num_blocks, block_size>>>(
-        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
-        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
-        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
-  } else if (batch->m <= 21) {
-    vec_det_kernel<21><<<num_blocks, block_size>>>(
-        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
-        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
-        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
-  } else if (batch->m <= 25) {
-    vec_det_kernel<25><<<num_blocks, block_size>>>(
-        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
-        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
-        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
-  } else {
-    vec_det_kernel<32><<<num_blocks, block_size>>>(
-        batch->d_vecs, batch->count, batch->m, batch->is_jack_mode,
-        batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M,
-        batch->d_results, batch->p, batch->p_dash, batch->r, batch->r3);
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    size_t offset = i * vecs_per_stream;
+    if (offset >= batch->count)
+      break;
+
+    size_t count = (offset + vecs_per_stream > batch->count)
+                   ? (batch->count - offset)
+                   : vecs_per_stream;
+
+    cudaStream_t stream = batch->streams[i];
+
+    // Async copy H2D for this sub-batch
+    size_t vecs_size = count * batch->m * sizeof(uint64_t);
+    CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs + offset * batch->m,
+                               batch->h_vecs + offset * batch->m,
+                               vecs_size,
+                               cudaMemcpyHostToDevice,
+                               stream));
+
+    // Launch kernel on this stream for this sub-batch
+    int num_blocks = (count + block_size - 1) / block_size;
+
+    // Dispatch to kernel with compile-time sized array based on m
+    if (batch->m <= 13) {
+      LAUNCH_KERNEL_ON_STREAM(13, stream, offset, count);
+    } else if (batch->m <= 17) {
+      LAUNCH_KERNEL_ON_STREAM(17, stream, offset, count);
+    } else if (batch->m <= 21) {
+      LAUNCH_KERNEL_ON_STREAM(21, stream, offset, count);
+    } else if (batch->m <= 25) {
+      LAUNCH_KERNEL_ON_STREAM(25, stream, offset, count);
+    } else {
+      LAUNCH_KERNEL_ON_STREAM(32, stream, offset, count);
+    }
+
+    CUDA_CHECK(cudaGetLastError());
+
+    // Async copy D2H for results of this sub-batch
+    CUDA_CHECK(cudaMemcpyAsync(batch->h_results + offset,
+                               batch->d_results + offset,
+                               count * sizeof(uint64_t),
+                               cudaMemcpyDeviceToHost,
+                               stream));
   }
 
-  CUDA_CHECK(cudaGetLastError());
-  CUDA_CHECK(cudaDeviceSynchronize());
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-  float kernel_ms;
-  cudaEventElapsedTime(&kernel_ms, start, stop);
-
-  // Copy results back
-  cudaEventRecord(start);
-  CUDA_CHECK(cudaMemcpy(batch->h_results, batch->d_results,
-                        batch->count * sizeof(uint64_t),
-                        cudaMemcpyDeviceToHost));
-  cudaEventRecord(stop);
-  cudaEventSynchronize(stop);
-  float d2h_ms;
-  cudaEventElapsedTime(&d2h_ms, start, stop);
-
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
+  // Wait for all streams to complete
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    CUDA_CHECK(cudaStreamSynchronize(batch->streams[i]));
+  }
 }
 
 uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
@@ -693,9 +697,16 @@ void vec_batch_free(vec_batch_t *batch) {
   if (!batch)
     return;
 
-  free(batch->h_vecs);
-  free(batch->h_results);
+  // Destroy CUDA streams
+  for (int i = 0; i < NUM_STREAMS; i++) {
+    CUDA_CHECK(cudaStreamDestroy(batch->streams[i]));
+  }
 
+  // Free pinned host memory
+  CUDA_CHECK(cudaFreeHost(batch->h_vecs));
+  CUDA_CHECK(cudaFreeHost(batch->h_results));
+
+  // Free device memory
   CUDA_CHECK(cudaFree(batch->d_vecs));
   CUDA_CHECK(cudaFree(batch->d_jk_prod_M));
   CUDA_CHECK(cudaFree(batch->d_nat_M));
