@@ -9,6 +9,7 @@
 
 #ifdef USE_GPU
 #include "gpu_det.h"
+#include <cuda_runtime.h>
 #endif
 
 #include <stdatomic.h>
@@ -627,6 +628,7 @@ typedef struct {
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
+  int device_id;  // GPU device ID for this worker
 } worker_t;
 
 static void w_resume(void *ud) {
@@ -675,90 +677,104 @@ static void *residue_for_prime(void *ud) {
 }
 
 #ifdef USE_GPU
-// GPU-accelerated worker with vector-based batching
+// Helper to post-process a batch of results
+static void process_batch_results(worker_t *worker, vec_batch_t *batch,
+                                   size_t n_vec, uint64_t *l_acc) {
+  const prim_ctx_t *ctx = worker->ctx;
+  uint64_t p = ctx->p;
+
+  // GPU has computed complete david() or jack() result for each vector
+  // Just retrieve and accumulate
+  for (size_t c = 0; c < n_vec; ++c) {
+    uint64_t result = vec_batch_get(batch, c);
+    *l_acc = add_mod_u64(*l_acc, result, p);
+  }
+
+  atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+}
+
+// GPU-accelerated worker with double-buffered batching
 static void *residue_for_prime_gpu(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
-  uint64_t m = ctx->m, p = ctx->p, l_acc = 0;
-  size_t *vecs = worker->vecs;
+  uint64_t m = ctx->m, l_acc = 0;
   worker->l_acc = &l_acc;
+
+  // Set GPU device for this worker
+  cudaSetDevice(worker->device_id);
 
   // Determine if we're in jack mode
   bool is_jack_mode = (worker->f != david);
 
-  // Create GPU vector batch - GPU builds matrices and computes determinants
-  vec_batch_t *batch = vec_batch_new(CHUNK, ctx->n, ctx->m, ctx->p, ctx->p_dash,
-                                      ctx->r, ctx->r3, ctx->jk_prod_M,
-                                      ctx->nat_M, ctx->nat_inv_M, is_jack_mode);
+  // Calculate n_rs (same formula as in prim_ctx_new)
+  size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
+
+  // Create 2 GPU batches for double buffering with all lookup tables
+  vec_batch_t *batches[2] = {
+    vec_batch_new(CHUNK, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
+                  ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
+                  ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
+                  ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
+                  ctx->m_half, n_rs, is_jack_mode),
+    vec_batch_new(CHUNK, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
+                  ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
+                  ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
+                  ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
+                  ctx->m_half, n_rs, is_jack_mode)
+  };
+
+  // Allocate 2 vector buffers
+  size_t *vecs_buffers[2] = {
+    worker->vecs,
+    malloc(CHUNK * m * sizeof(size_t))
+  };
+
+  size_t n_vecs[2] = {0, 0};
+  int current = 0;  // Which buffer/batch we're filling
+  bool first = true;
 
   for (;;) {
-    size_t n_vec = queue_pop(worker->q, vecs, w_idle, worker);
-    if (!n_vec)
+    // Pop vectors into current buffer
+    n_vecs[current] = queue_pop(worker->q, vecs_buffers[current], w_idle, worker);
+    if (!n_vecs[current] && first) {
+      // No work at all
       break;
-
-    vec_batch_clear(batch);
-
-    // Phase 1: Add all vectors to batch
-    for (size_t c = 0; c < n_vec; ++c) {
-      uint64_t *vec = &vecs[c * m];
-      vec_batch_add(batch, vec);
     }
 
-    // Phase 2: GPU computes f_snd_trm for all vectors (builds matrices + dets)
-    vec_batch_compute(batch);
-
-    // Phase 3: Complete calculations and accumulate results
-    for (size_t c = 0; c < n_vec; ++c) {
-      uint64_t *vec = &vecs[c * m];
-
-      // Compute f_fst_trm on CPU
-      uint64_t f_fst_result = f_fst_trm(vec, ctx);
-
-      // Get f_snd_trm result from GPU
-      uint64_t f_snd_result = vec_batch_get(batch, c);
-
-      // Complete f() calculation
-      uint64_t f_0 = mont_mul(f_fst_result, f_snd_result, p, ctx->p_dash);
-
-      // Now compute david() or jack() using f_0
-      uint64_t ret = 0;
-      uint64_t coeff_baseline = multinomial_mod_p(ctx, vec, m);
-
-      for (size_t r = 0; r < m; ++r) {
-        if (vec[r] == 0)
-          continue;
-
-        uint64_t coeff =
-            mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
-
-        uint64_t f_n;
-        if (worker->f == david) {
-          size_t idx = (2 * r) % m;
-          f_n = mont_mul(coeff,
-                         mont_mul(f_0, ctx->ws_M[idx ? m - idx : 0], p,
-                                  ctx->p_dash),
-                         p, ctx->p_dash);
-        } else {
-          // jack mode
-          f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
-        }
-
-        ret = add_mod_u64(ret, f_n, p);
+    if (n_vecs[current] > 0) {
+      // Add vectors to current batch
+      vec_batch_clear(batches[current]);
+      for (size_t c = 0; c < n_vecs[current]; ++c) {
+        vec_batch_add(batches[current], &vecs_buffers[current][c * m]);
       }
 
-      // For jack, apply final scaling
-      if (worker->f != david) {
-        ret = mont_mul(ret, ctx->nat_M[ctx->n - 1], p, ctx->p_dash);
-        ret = mont_mul(ret, ctx->nat_M[ctx->n - 1], p, ctx->p_dash);
-      }
-
-      l_acc = add_mod_u64(l_acc, ret, p);
+      // Launch async GPU compute on current batch (returns immediately)
+      vec_batch_compute_async(batches[current]);
     }
 
-    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+    // Process previous batch results while GPU works on current (if not first)
+    if (!first) {
+      int prev = 1 - current;
+      // First wait for previous GPU work to complete
+      vec_batch_wait(batches[prev]);
+      // Then process results on CPU (GPU continues working on current)
+      process_batch_results(worker, batches[prev], n_vecs[prev], &l_acc);
+    }
+
+    if (!n_vecs[current]) {
+      // Queue empty, wait for final batch and process
+      vec_batch_wait(batches[current]);
+      process_batch_results(worker, batches[current], n_vecs[current], &l_acc);
+      break;
+    }
+
+    first = false;
+    current = 1 - current;  // Swap buffers
   }
 
-  vec_batch_free(batch);
+  vec_batch_free(batches[0]);
+  vec_batch_free(batches[1]);
+  free(vecs_buffers[1]);
 
   (void)w_idle(worker);
   return NULL;
@@ -838,6 +854,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
 #ifdef USE_GPU
   bool use_gpu = gpu_det_available();
+  int n_gpus = use_gpu ? gpu_det_device_count() : 0;
   void *(*worker_fn)(void *) = use_gpu ? residue_for_prime_gpu : residue_for_prime;
 #else
   void *(*worker_fn)(void *) = residue_for_prime;
@@ -851,7 +868,13 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .vecs = &st->vecss[i * CHUNK * m],
                            .idle = false,
                            .acc = &acc,
-                           .acc_mu = &acc_mu};
+                           .acc_mu = &acc_mu,
+#ifdef USE_GPU
+                           .device_id = use_gpu ? (int)(i % n_gpus) : 0
+#else
+                           .device_id = 0
+#endif
+                           };
     idles[i] = &w_ctxs[i].idle;
     // worker threads
     pthread_create(&worker[i], NULL, worker_fn, &w_ctxs[i]);
@@ -862,7 +885,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     snapshot_start(&ss, st->mode, n, p, st->n_thrds, q, idles, &done, &acc);
 
   // Use frontier-based parallel generation
-  size_t n_producers = st->n_thrds < 4 ? 1 : 4;
+  size_t n_producers = st->n_thrds < 4 ? 1 : 3;
   size_t depth = 5;
   queue_fill_parallel(q, n_producers, depth);
 

@@ -16,6 +16,13 @@
     }                                                                          \
   } while (0)
 
+// Power cache parameters (must match source_process.c)
+#define POW_CACHE_SPLIT 6
+#define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
+
+// Number of CUDA streams for pipelining
+#define NUM_STREAMS 4
+
 typedef unsigned __int128 uint128_t;
 
 // Helper function for jk_pos on device
@@ -90,6 +97,80 @@ __device__ inline uint64_t d_mont_mul_sub(uint64_t a1, uint64_t b1,
   uint64_t u = (t + (uint128_t)m * p) >> 64;
   int64_t maybe = u - p;
   return maybe < 0 ? u : (uint64_t)maybe;
+}
+
+// Device-side fast_pow_2 using rs cache
+__device__ inline uint64_t d_fast_pow_2(const uint64_t *d_rs, uint64_t pow,
+                                        uint64_t p, uint64_t p_dash) {
+  uint64_t r_pow = pow / 64;
+  uint64_t remain = pow % 64;
+  uint64_t pow2 = 1UL << remain;
+  return d_mont_mul(pow2, d_rs[r_pow + 2], p, p_dash);
+}
+
+// Device-side jk_sums_pow using split power cache
+__device__ inline uint64_t d_jk_sums_pow(const uint64_t *d_jk_sums_pow_upper_M,
+                                          const uint64_t *d_jk_sums_pow_lower_M,
+                                          uint64_t diff, uint64_t pow,
+                                          size_t m_half, uint64_t p, uint64_t p_dash) {
+  uint64_t upper_index = pow >> POW_CACHE_SPLIT;
+  uint64_t lower_index = pow & (POW_CACHE_DIVISOR - 1);
+
+  uint64_t upper_index_full = upper_index * m_half + diff;
+  uint64_t lower_index_full = lower_index * m_half + diff;
+
+  return d_mont_mul(d_jk_sums_pow_upper_M[upper_index_full],
+                    d_jk_sums_pow_lower_M[lower_index_full], p, p_dash);
+}
+
+// Device-side multinomial coefficient computation
+__device__ inline uint64_t d_multinomial_mod_p(const uint64_t *d_fact_M,
+                                                const uint64_t *d_fact_inv_M,
+                                                const uint64_t *vec, uint64_t m,
+                                                uint64_t n_args, uint64_t p,
+                                                uint64_t p_dash) {
+  uint64_t coeff = d_fact_M[n_args - 1];
+  for (size_t i = 0; i < m; ++i) {
+    coeff = d_mont_mul(coeff, d_fact_inv_M[vec[i]], p, p_dash);
+  }
+  return coeff;
+}
+
+// Device-side f_fst_trm computation
+__device__ inline uint64_t d_f_fst_trm(const uint64_t *vec, uint64_t m,
+                                        size_t m_half, const uint64_t *d_rs,
+                                        const uint64_t *d_jk_sums_pow_upper_M,
+                                        const uint64_t *d_jk_sums_pow_lower_M,
+                                        uint64_t p, uint64_t p_dash) {
+  uint64_t e = 0;
+  uint64_t pows[32];  // Assume m <= 32
+  for (size_t i = 0; i < m; ++i) {
+    pows[i] = 0;
+  }
+
+  for (size_t a = 0; a < m; ++a) {
+    uint64_t ca = vec[a];
+    if (!ca)
+      continue;
+
+    e += (ca * (ca - 1));
+
+    for (size_t b = a + 1; b < m; ++b) {
+      uint64_t cb = vec[b];
+      uint64_t diff = b - a;
+      pows[diff] += ca * cb;
+    }
+  }
+
+  uint64_t acc = d_fast_pow_2(d_rs, e / 2, p, p_dash);
+
+  for (size_t i = 1; i < m_half; i++) {
+    uint64_t pow_val = d_jk_sums_pow(d_jk_sums_pow_upper_M, d_jk_sums_pow_lower_M,
+                                      i, pows[i] + pows[m - i], m_half, p, p_dash);
+    acc = d_mont_mul(acc, pow_val, p, p_dash);
+  }
+
+  return acc;
 }
 
 // Build matrix for f_snd_trm on GPU, return dimension and prod_M
@@ -298,6 +379,138 @@ __global__ void vec_det_kernel(const uint64_t *vecs, size_t n_vecs, uint64_t m,
   results[vec_idx] = result;
 }
 
+// Comprehensive kernel: computes full david() or jack() result on GPU
+// Each thread processes one coefficient vector and produces final result
+template<int MAX_DIM>
+__global__ void vec_full_kernel(const uint64_t *vecs, size_t n_vecs, uint64_t m,
+                                 uint64_t n, uint64_t n_args, size_t m_half,
+                                 bool is_jack_mode,
+                                 const uint64_t *d_jk_prod_M,
+                                 const uint64_t *d_nat_M,
+                                 const uint64_t *d_nat_inv_M,
+                                 const uint64_t *d_ws_M,
+                                 const uint64_t *d_jk_sums_M,
+                                 const uint64_t *d_jk_sums_pow_lower_M,
+                                 const uint64_t *d_jk_sums_pow_upper_M,
+                                 const uint64_t *d_rs,
+                                 const uint64_t *d_fact_M,
+                                 const uint64_t *d_fact_inv_M,
+                                 uint64_t *results,
+                                 uint64_t p, uint64_t p_dash, uint64_t r,
+                                 uint64_t r3) {
+  int vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+  if (vec_idx >= n_vecs)
+    return;
+
+  const uint64_t *vec = &vecs[vec_idx * m];
+
+  // Step 1: Compute f_fst_trm
+  uint64_t f_fst_result = d_f_fst_trm(vec, m, m_half, d_rs,
+                                       d_jk_sums_pow_upper_M,
+                                       d_jk_sums_pow_lower_M, p, p_dash);
+
+  // Step 2: Compute f_snd_trm (build matrix + compute determinant)
+  uint64_t A[MAX_DIM * MAX_DIM];
+  uint64_t prod_M;
+  size_t dim;
+
+  if (is_jack_mode) {
+    dim = d_jack_snd_trm_build_matrix(vec, m, d_jk_prod_M, d_nat_M, A, &prod_M,
+                                       p, p_dash, r);
+  } else {
+    dim = d_f_snd_trm_build_matrix(vec, m, d_jk_prod_M, d_nat_M, d_nat_inv_M, A,
+                                    &prod_M, p, p_dash, r);
+  }
+
+  uint64_t f_snd_result;
+  if (dim == 0) {
+    f_snd_result = prod_M;
+  } else {
+    // Compute determinant via Gaussian elimination
+    uint64_t det = r, scaling_factor = r;
+
+    for (size_t k = 0; k < dim; ++k) {
+      // Find pivot
+      size_t pivot_i = k;
+      while (pivot_i < dim && A[pivot_i * dim + k] == 0)
+        ++pivot_i;
+
+      if (pivot_i == dim) {
+        det = 0;
+        break;
+      }
+
+      // Swap rows if needed
+      if (pivot_i != k) {
+        for (size_t j = 0; j < dim; ++j) {
+          uint64_t tmp = A[k * dim + j];
+          A[k * dim + j] = A[pivot_i * dim + j];
+          A[pivot_i * dim + j] = tmp;
+        }
+        det = p - det;
+      }
+
+      uint64_t pivot = A[k * dim + k];
+      det = d_mont_mul(det, pivot, p, p_dash);
+
+      // Elimination
+      for (size_t i = k + 1; i < dim; ++i) {
+        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+        uint64_t multiplier = A[i * dim + k];
+        for (size_t j = k; j < dim; ++j) {
+          A[i * dim + j] = d_mont_mul_sub(A[i * dim + j], pivot, A[k * dim + j],
+                                          multiplier, p, p_dash);
+        }
+      }
+    }
+
+    // Compute final determinant
+    if (det != 0) {
+      det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
+    }
+
+    f_snd_result = d_mont_mul(prod_M, det, p, p_dash);
+  }
+
+  // Step 3: Multiply f_fst_result and f_snd_result to get f_0
+  uint64_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
+
+  // Step 4: Compute multinomial coefficient
+  uint64_t coeff_baseline = d_multinomial_mod_p(d_fact_M, d_fact_inv_M, vec, m,
+                                                 n_args, p, p_dash);
+
+  // Step 5: Loop over rotations (david or jack)
+  uint64_t ret = 0;
+  for (size_t r_idx = 0; r_idx < m; ++r_idx) {
+    if (vec[r_idx] == 0)
+      continue;
+
+    uint64_t coeff = d_mont_mul(coeff_baseline, d_nat_M[vec[r_idx]], p, p_dash);
+
+    uint64_t f_n;
+    if (is_jack_mode) {
+      // Jack mode
+      f_n = d_mont_mul(coeff, f_0, p, p_dash);
+    } else {
+      // David mode
+      size_t idx = (2 * r_idx) % m;
+      f_n = d_mont_mul(coeff,
+                       d_mont_mul(f_0, d_ws_M[idx ? m - idx : 0], p, p_dash),
+                       p, p_dash);
+    }
+
+    ret = d_add_mod(ret, f_n, p);
+  }
+
+  // Step 6: Apply final scaling for jack mode
+  if (is_jack_mode) {
+    ret = d_mont_mul(ret, d_nat_M[n - 1], p, p_dash);
+    ret = d_mont_mul(ret, d_nat_M[n - 1], p, p_dash);
+  }
+
+  results[vec_idx] = ret;
+}
+
 // OLD determinant computation kernel - one thread per matrix
 // Each thread independently computes the determinant of one matrix
 // Works directly in global memory - modifies the input!
@@ -391,7 +604,31 @@ struct det_batch_t {
 bool gpu_det_available(void) {
   int device_count = 0;
   cudaError_t err = cudaGetDeviceCount(&device_count);
-  return err == cudaSuccess && device_count > 0;
+  if (err != cudaSuccess || device_count == 0)
+    return false;
+
+  // Print GPU info on first call
+  static bool printed = false;
+  if (!printed) {
+    printf("Found %d GPU%s:\n", device_count, device_count > 1 ? "s" : "");
+    for (int i = 0; i < device_count; i++) {
+      cudaDeviceProp prop;
+      cudaGetDeviceProperties(&prop, i);
+      printf("  GPU %d: %s (SM count: %d, Max threads per block: %d)\n",
+             i, prop.name, prop.multiProcessorCount, prop.maxThreadsPerBlock);
+    }
+    printed = true;
+  }
+
+  return true;
+}
+
+int gpu_det_device_count(void) {
+  int device_count = 0;
+  cudaError_t err = cudaGetDeviceCount(&device_count);
+  if (err != cudaSuccess)
+    return 0;
+  return device_count;
 }
 
 det_batch_t *det_batch_new(size_t max_matrices, size_t max_dim, uint64_t p,
@@ -533,19 +770,26 @@ void det_batch_free(det_batch_t *batch) {
 // Vector-based batch API (builds matrices on GPU)
 // ============================================================================
 
-// Number of CUDA streams for pipelining
-#define NUM_STREAMS 4
-
 struct vec_batch_t {
   // Host data (pinned for async transfers)
   uint64_t *h_vecs;    // max_vecs * m
   uint64_t *h_results; // max_vecs
 
-  // Device data
+  // Device data - matrix computation
   uint64_t *d_vecs;
   uint64_t *d_jk_prod_M;
   uint64_t *d_nat_M;
   uint64_t *d_nat_inv_M;
+
+  // Device data - full computation lookup tables
+  uint64_t *d_ws_M;           // m
+  uint64_t *d_jk_sums_M;      // m
+  uint64_t *d_jk_sums_pow_lower_M;  // POW_CACHE_DIVISOR * m_half
+  uint64_t *d_jk_sums_pow_upper_M;  // POW_CACHE_DIVISOR * m_half
+  uint64_t *d_rs;             // n_rs
+  uint64_t *d_fact_M;         // n+1
+  uint64_t *d_fact_inv_M;     // n+1
+
   uint64_t *d_results;
 
   // CUDA streams for pipelining
@@ -554,25 +798,35 @@ struct vec_batch_t {
   // Batch parameters
   size_t max_vecs;
   size_t count;
-  uint64_t n;  // For nat_M sizing
+  uint64_t n;
+  uint64_t n_args;
   uint64_t m;
+  size_t m_half;
+  size_t n_rs;
   bool is_jack_mode;
 
   // Montgomery parameters
   uint64_t p, p_dash, r, r3;
 };
 
-vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t m, uint64_t p,
-                            uint64_t p_dash, uint64_t r, uint64_t r3,
+vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t n_args, uint64_t m,
+                            uint64_t p, uint64_t p_dash, uint64_t r, uint64_t r3,
                             const uint64_t *jk_prod_M, const uint64_t *nat_M,
-                            const uint64_t *nat_inv_M, bool is_jack_mode) {
+                            const uint64_t *nat_inv_M, const uint64_t *ws_M,
+                            const uint64_t *jk_sums_M, const uint64_t *jk_sums_pow_lower_M,
+                            const uint64_t *jk_sums_pow_upper_M, const uint64_t *rs,
+                            const uint64_t *fact_M, const uint64_t *fact_inv_M,
+                            size_t m_half, size_t n_rs, bool is_jack_mode) {
   vec_batch_t *batch = (vec_batch_t *)malloc(sizeof(vec_batch_t));
   assert(batch);
 
   batch->max_vecs = max_vecs;
   batch->count = 0;
   batch->n = n;
+  batch->n_args = n_args;
   batch->m = m;
+  batch->m_half = m_half;
+  batch->n_rs = n_rs;
   batch->p = p;
   batch->p_dash = p_dash;
   batch->r = r;
@@ -588,26 +842,47 @@ vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t m, uint64_t p,
     CUDA_CHECK(cudaStreamCreate(&batch->streams[i]));
   }
 
-  // Allocate device memory
+  // Allocate device memory - matrix computation
   CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * m * sizeof(uint64_t)));
   CUDA_CHECK(cudaMalloc(&batch->d_jk_prod_M, m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_nat_M, (n + 1) * sizeof(uint64_t)));  // FIX: n not m!
+  CUDA_CHECK(cudaMalloc(&batch->d_nat_M, (n + 1) * sizeof(uint64_t)));
   if (!is_jack_mode) {
-    CUDA_CHECK(cudaMalloc(&batch->d_nat_inv_M, (n + 1) * sizeof(uint64_t)));  // FIX: n not m!
+    CUDA_CHECK(cudaMalloc(&batch->d_nat_inv_M, (n + 1) * sizeof(uint64_t)));
   } else {
     batch->d_nat_inv_M = NULL;
   }
+
+  // Allocate device memory - full computation lookup tables
+  CUDA_CHECK(cudaMalloc(&batch->d_ws_M, m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_jk_sums_M, m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_jk_sums_pow_lower_M, POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_jk_sums_pow_upper_M, POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_rs, n_rs * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_fact_M, (n + 1) * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_fact_inv_M, (n + 1) * sizeof(uint64_t)));
+
   CUDA_CHECK(cudaMalloc(&batch->d_results, max_vecs * sizeof(uint64_t)));
 
-  // Copy constant data to device
+  // Copy constant data to device - matrix computation
   CUDA_CHECK(cudaMemcpy(batch->d_jk_prod_M, jk_prod_M, m * sizeof(uint64_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_nat_M, nat_M, (n + 1) * sizeof(uint64_t),  // FIX: n not m!
+  CUDA_CHECK(cudaMemcpy(batch->d_nat_M, nat_M, (n + 1) * sizeof(uint64_t),
                         cudaMemcpyHostToDevice));
   if (!is_jack_mode) {
     CUDA_CHECK(cudaMemcpy(batch->d_nat_inv_M, nat_inv_M,
-                          (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));  // FIX: n not m!
+                          (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
   }
+
+  // Copy constant data to device - full computation lookup tables
+  CUDA_CHECK(cudaMemcpy(batch->d_ws_M, ws_M, m * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(batch->d_jk_sums_M, jk_sums_M, m * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(batch->d_jk_sums_pow_lower_M, jk_sums_pow_lower_M,
+                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(batch->d_jk_sums_pow_upper_M, jk_sums_pow_upper_M,
+                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(batch->d_rs, rs, n_rs * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(batch->d_fact_M, fact_M, (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(batch->d_fact_inv_M, fact_inv_M, (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
 
   return batch;
 }
@@ -626,7 +901,19 @@ size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec) {
       batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M, \
       batch->d_results + (offset), batch->p, batch->p_dash, batch->r, batch->r3)
 
-void vec_batch_compute(vec_batch_t *batch) {
+// Helper macro to launch comprehensive kernel (full david/jack computation)
+#define LAUNCH_FULL_KERNEL_ON_STREAM(MAX_DIM, stream, offset, count) \
+  vec_full_kernel<MAX_DIM><<<num_blocks, block_size, 0, stream>>>( \
+      batch->d_vecs + (offset) * batch->m, (count), batch->m, \
+      batch->n, batch->n_args, batch->m_half, batch->is_jack_mode, \
+      batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M, \
+      batch->d_ws_M, batch->d_jk_sums_M, \
+      batch->d_jk_sums_pow_lower_M, batch->d_jk_sums_pow_upper_M, \
+      batch->d_rs, batch->d_fact_M, batch->d_fact_inv_M, \
+      batch->d_results + (offset), batch->p, batch->p_dash, batch->r, batch->r3)
+
+// Launch async GPU compute (non-blocking)
+void vec_batch_compute_async(vec_batch_t *batch) {
   if (batch->count == 0)
     return;
 
@@ -657,17 +944,17 @@ void vec_batch_compute(vec_batch_t *batch) {
     // Launch kernel on this stream for this sub-batch
     int num_blocks = (count + block_size - 1) / block_size;
 
-    // Dispatch to kernel with compile-time sized array based on m
+    // Dispatch to comprehensive kernel with compile-time sized array based on m
     if (batch->m <= 13) {
-      LAUNCH_KERNEL_ON_STREAM(13, stream, offset, count);
+      LAUNCH_FULL_KERNEL_ON_STREAM(13, stream, offset, count);
     } else if (batch->m <= 17) {
-      LAUNCH_KERNEL_ON_STREAM(17, stream, offset, count);
+      LAUNCH_FULL_KERNEL_ON_STREAM(17, stream, offset, count);
     } else if (batch->m <= 21) {
-      LAUNCH_KERNEL_ON_STREAM(21, stream, offset, count);
+      LAUNCH_FULL_KERNEL_ON_STREAM(21, stream, offset, count);
     } else if (batch->m <= 25) {
-      LAUNCH_KERNEL_ON_STREAM(25, stream, offset, count);
+      LAUNCH_FULL_KERNEL_ON_STREAM(25, stream, offset, count);
     } else {
-      LAUNCH_KERNEL_ON_STREAM(32, stream, offset, count);
+      LAUNCH_FULL_KERNEL_ON_STREAM(32, stream, offset, count);
     }
 
     CUDA_CHECK(cudaGetLastError());
@@ -679,11 +966,20 @@ void vec_batch_compute(vec_batch_t *batch) {
                                cudaMemcpyDeviceToHost,
                                stream));
   }
+  // Returns immediately - GPU work continues asynchronously
+}
 
-  // Wait for all streams to complete
+// Wait for async compute to complete
+void vec_batch_wait(vec_batch_t *batch) {
   for (int i = 0; i < NUM_STREAMS; i++) {
     CUDA_CHECK(cudaStreamSynchronize(batch->streams[i]));
   }
+}
+
+// Synchronous compute (launch + wait)
+void vec_batch_compute(vec_batch_t *batch) {
+  vec_batch_compute_async(batch);
+  vec_batch_wait(batch);
 }
 
 uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
@@ -706,12 +1002,22 @@ void vec_batch_free(vec_batch_t *batch) {
   CUDA_CHECK(cudaFreeHost(batch->h_vecs));
   CUDA_CHECK(cudaFreeHost(batch->h_results));
 
-  // Free device memory
+  // Free device memory - matrix computation
   CUDA_CHECK(cudaFree(batch->d_vecs));
   CUDA_CHECK(cudaFree(batch->d_jk_prod_M));
   CUDA_CHECK(cudaFree(batch->d_nat_M));
   if (batch->d_nat_inv_M)
     CUDA_CHECK(cudaFree(batch->d_nat_inv_M));
+
+  // Free device memory - full computation lookup tables
+  CUDA_CHECK(cudaFree(batch->d_ws_M));
+  CUDA_CHECK(cudaFree(batch->d_jk_sums_M));
+  CUDA_CHECK(cudaFree(batch->d_jk_sums_pow_lower_M));
+  CUDA_CHECK(cudaFree(batch->d_jk_sums_pow_upper_M));
+  CUDA_CHECK(cudaFree(batch->d_rs));
+  CUDA_CHECK(cudaFree(batch->d_fact_M));
+  CUDA_CHECK(cudaFree(batch->d_fact_inv_M));
+
   CUDA_CHECK(cudaFree(batch->d_results));
 
   free(batch);
