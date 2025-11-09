@@ -867,9 +867,6 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     progress_start(&prog, p, &done, siz, &q->fill);
 
   // make some threads
-  pthread_t worker[st->n_thrds];
-  worker_t w_ctxs[st->n_thrds];
-  bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
   uint64_t (*fn)(uint64_t *, const prim_ctx_t *) =
       st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
@@ -877,12 +874,21 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 #ifdef USE_GPU
   bool use_gpu = gpu_det_available();
   int n_gpus = use_gpu ? gpu_det_device_count() : 0;
+  // With GPU: use fewer workers (2-3 per GPU) to reduce queue contention
+  // Remaining threads will be producers
+  size_t n_workers = use_gpu ? ((size_t)n_gpus * 3) : st->n_thrds;
+  if (n_workers > st->n_thrds) n_workers = st->n_thrds;
   void *(*worker_fn)(void *) = use_gpu ? residue_for_prime_gpu : residue_for_prime;
 #else
+  size_t n_workers = st->n_thrds;
   void *(*worker_fn)(void *) = residue_for_prime;
 #endif
 
-  for (size_t i = 0; i < st->n_thrds; ++i) {
+  pthread_t worker[n_workers];
+  worker_t w_ctxs[n_workers];
+  bool *idles[n_workers];
+
+  for (size_t i = 0; i < n_workers; ++i) {
     w_ctxs[i] = (worker_t){.ctx = ctx,
                            .f = fn,
                            .done = &done,
@@ -904,14 +910,25 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   snapshot_t ss;
   if (st->snapshot)
-    snapshot_start(&ss, st->mode, n, p, st->n_thrds, q, idles, &done, &acc);
+    snapshot_start(&ss, st->mode, n, p, n_workers, q, idles, &done, &acc);
 
   // Use frontier-based parallel generation
-  size_t n_producers = st->n_thrds < 4 ? 1 : 3;
+  // With GPU: use remaining threads as producers (st->n_thrds - n_workers)
+  size_t n_producers;
+#ifdef USE_GPU
+  if (use_gpu) {
+    n_producers = st->n_thrds - n_workers;
+    if (n_producers < 2) n_producers = 2;  // Always at least 2 producers
+  } else {
+    n_producers = st->n_thrds < 4 ? 1 : 3;
+  }
+#else
+  n_producers = st->n_thrds < 4 ? 1 : 3;
+#endif
   size_t depth = 5;
   queue_fill_parallel(q, n_producers, depth);
 
-  for (size_t i = 0; i < st->n_thrds; ++i)
+  for (size_t i = 0; i < n_workers; ++i)
     pthread_join(worker[i], NULL);
 
   queue_free(q);
