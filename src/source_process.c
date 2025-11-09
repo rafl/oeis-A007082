@@ -709,39 +709,36 @@ static void *residue_for_prime_gpu(void *ud) {
   // Calculate n_rs (same formula as in prim_ctx_new)
   size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
 
-  // Create 2 GPU batches for double buffering with all lookup tables
-  vec_batch_t *batches[2] = {
-    vec_batch_new(CHUNK, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
-                  ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
-                  ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
-                  ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
-                  ctx->m_half, n_rs, is_jack_mode),
-    vec_batch_new(CHUNK, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
-                  ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
-                  ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
-                  ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
-                  ctx->m_half, n_rs, is_jack_mode)
-  };
+  // Create 4 GPU batches for quad buffering with all lookup tables
+  // More buffers = more in-flight work = better GPU utilization
+  #define NUM_BUFFERS 4
+  vec_batch_t *batches[NUM_BUFFERS];
+  size_t *vecs_buffers[NUM_BUFFERS];
+  size_t n_vecs[NUM_BUFFERS];
 
-  // Allocate 2 vector buffers
-  size_t *vecs_buffers[2] = {
-    worker->vecs,
-    malloc(CHUNK * m * sizeof(size_t))
-  };
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    batches[i] = vec_batch_new(CHUNK, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
+                                ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
+                                ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
+                                ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
+                                ctx->m_half, n_rs, is_jack_mode);
+    vecs_buffers[i] = (i == 0) ? worker->vecs : malloc(CHUNK * m * sizeof(size_t));
+    n_vecs[i] = 0;
+  }
 
-  size_t n_vecs[2] = {0, 0};
-  int current = 0;  // Which buffer/batch we're filling
-  bool first = true;
+  int current = 0;
+  int in_flight = 0;  // How many batches are currently in flight on GPU
 
   for (;;) {
-    // Pop vectors into current buffer
-    n_vecs[current] = queue_pop(worker->q, vecs_buffers[current], w_idle, worker);
-    if (!n_vecs[current] && first) {
-      // No work at all
-      break;
-    }
+    // Fill up the pipeline initially
+    while (in_flight < NUM_BUFFERS) {
+      n_vecs[current] = queue_pop(worker->q, vecs_buffers[current], w_idle, worker);
 
-    if (n_vecs[current] > 0) {
+      if (n_vecs[current] == 0) {
+        // Queue is empty
+        break;
+      }
+
       // Add vectors to current batch
       vec_batch_clear(batches[current]);
       for (size_t c = 0; c < n_vecs[current]; ++c) {
@@ -750,31 +747,56 @@ static void *residue_for_prime_gpu(void *ud) {
 
       // Launch async GPU compute on current batch (returns immediately)
       vec_batch_compute_async(batches[current]);
+      in_flight++;
+      current = (current + 1) % NUM_BUFFERS;
     }
 
-    // Process previous batch results while GPU works on current (if not first)
-    if (!first) {
-      int prev = 1 - current;
-      // First wait for previous GPU work to complete
-      vec_batch_wait(batches[prev]);
-      // Then process results on CPU (GPU continues working on current)
-      process_batch_results(worker, batches[prev], n_vecs[prev], &l_acc);
-    }
-
-    if (!n_vecs[current]) {
-      // Queue empty, wait for final batch and process
-      vec_batch_wait(batches[current]);
-      process_batch_results(worker, batches[current], n_vecs[current], &l_acc);
+    if (in_flight == 0) {
+      // Never got any work
       break;
     }
 
-    first = false;
-    current = 1 - current;  // Swap buffers
+    // Now process the oldest batch (which should be done or nearly done)
+    int oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
+
+    // Wait for oldest batch to complete
+    vec_batch_wait(batches[oldest]);
+
+    // Process its results
+    process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
+    in_flight--;
+
+    // Pop new work and launch it
+    n_vecs[current] = queue_pop(worker->q, vecs_buffers[current], w_idle, worker);
+
+    if (n_vecs[current] == 0) {
+      // No more work, drain remaining in-flight batches
+      while (in_flight > 0) {
+        oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
+        vec_batch_wait(batches[oldest]);
+        process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
+        in_flight--;
+      }
+      break;
+    }
+
+    // Add vectors to current batch
+    vec_batch_clear(batches[current]);
+    for (size_t c = 0; c < n_vecs[current]; ++c) {
+      vec_batch_add(batches[current], &vecs_buffers[current][c * m]);
+    }
+
+    // Launch async GPU compute on current batch
+    vec_batch_compute_async(batches[current]);
+    in_flight++;
+    current = (current + 1) % NUM_BUFFERS;
   }
 
-  vec_batch_free(batches[0]);
-  vec_batch_free(batches[1]);
-  free(vecs_buffers[1]);
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    vec_batch_free(batches[i]);
+    if (i > 0) free(vecs_buffers[i]);
+  }
+  #undef NUM_BUFFERS
 
   (void)w_idle(worker);
   return NULL;
