@@ -10,6 +10,7 @@ void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch) {
   it->tot = tot;
   it->scratch = scratch;
   memset(it->scratch, 0, (m + 1) * sizeof(size_t));
+  it->scratch[0] = tot;
 
   it->t = 1; // position
   it->p = 1; // period length
@@ -53,8 +54,7 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
       if (it->t > m) { // leaf
         it->stage = ITER_STAGE_BACKTRACK;
         if (m % it->p == 0 && it->sum == tot) {
-          vec[0] = a[m];
-          memcpy(vec + 1, a + 1, (m - 1) * sizeof(size_t));
+          memcpy(vec, a + 1, m * sizeof(size_t));
           return true;
         }
         break;
@@ -69,7 +69,7 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
       }
 
       it->stage = ITER_STAGE_LOOP;
-      a[it->t] = v + 1;
+      a[it->t] = tot - it->sum;
       break;
     }
 
@@ -93,7 +93,10 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
         return false;
 
       it->sum -= a[it->t];
-      a[it->t] += 1;
+      if (a[it->t] == 0) {
+        break;
+      }
+      --a[it->t];
       it->stage = ITER_STAGE_LOOP;
       break;
     }
