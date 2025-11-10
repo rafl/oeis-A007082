@@ -61,7 +61,14 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
     case ITER_STAGE_DESCEND: {
       if (it->t == it->depth + 1) {
         it->stage = ITER_STAGE_BACKTRACK;
-        if (it->depth < m || (m % it->p == 0 && it->sum == tot)) {
+        if (it->depth == m) {
+          if (m % it->p == 0 && it->sum == tot) {
+            memcpy(vec, a + 1, it->depth * sizeof(size_t));
+            return true;
+          }
+          break;
+        }
+        if (a[1] * (m - it->depth) >= (tot - it->sum)) {
           memcpy(vec, a + 1, it->depth * sizeof(size_t));
           return true;
         }
