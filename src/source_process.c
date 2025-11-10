@@ -622,6 +622,7 @@ typedef struct {
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
+  size_t prefix_depth;
 } worker_t;
 
 static void w_resume(void *ud) {
@@ -647,22 +648,36 @@ static void *residue_for_prime(void *ud) {
   uint64_t m = ctx->m, p = ctx->p,
            l_acc = 0; // l_acc is where we're going to accumulate the total
                       // residual from the stuff we pull from our work queue
-  size_t *vecs = worker->vecs;
+  size_t *prefix_buf = worker->vecs;
+  size_t prefix_depth = worker->prefix_depth;
+  size_t n_args = ctx->n_args;
   worker->l_acc = &l_acc;
 
+  size_t sub_scratch[m + 1], full_vec[m], necklace_count = 0;
+
   for (;;) {
-    size_t n_vec = queue_pop(worker->q, vecs, w_idle, worker);
+    size_t n_vec = queue_pop(worker->q, prefix_buf, w_idle, worker);
     if (!n_vec)
       break;
 
     for (size_t c = 0; c < n_vec; ++c) {
-      // each vector has len m
-      // each vector contains the multiplicity with which each power of omega
-      // appears in the args i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of
-      // w^2
-      l_acc = add_mod_u64(l_acc, f(&vecs[c * m], ctx), p);
+      size_t *prefix = &prefix_buf[c * prefix_depth];
+
+      canon_iter_t sub_iter;
+      canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,
+                             prefix_depth);
+
+      while (canon_iter_next(&sub_iter, full_vec)) {
+        // each vector has len m
+        // each vector contains the multiplicity with which each power of omega
+        // appears in the args i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7
+        // lots of w^2
+        l_acc = add_mod_u64(l_acc, f(full_vec, ctx), p);
+        ++necklace_count;
+      }
     }
-    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+    atomic_fetch_add_explicit(worker->done, necklace_count, memory_order_relaxed);
+    necklace_count = 0;
   }
 
   (void)w_idle(worker);
@@ -723,8 +738,10 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (done == siz)
     return ret(st, ctx, acc, res, p_ret);
 
+  size_t prefix_depth = canon_iter_depth_for(m);
+
   // shared work queue
-  queue_t *q = queue_new(st->n_args, m, iter_st, st_len,
+  queue_t *q = queue_new(st->n_args, m, prefix_depth, iter_st, st_len,
                          &st->vecss[st->n_thrds * CHUNK * m]);
 
   progress_t prog;
@@ -747,7 +764,8 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .vecs = &st->vecss[i * CHUNK * m],
                            .idle = false,
                            .acc = &acc,
-                           .acc_mu = &acc_mu};
+                           .acc_mu = &acc_mu,
+                           .prefix_depth = prefix_depth};
     idles[i] = &w_ctxs[i].idle;
     // worker threads
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
@@ -806,9 +824,12 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
+  size_t prefix_depth = canon_iter_depth_for(m);
   bool borrowed = vecss;
   if (!vecss) {
-    vecss = malloc(CHUNK * m * (n_thrds + 1 + Q_CAP) * sizeof(size_t));
+    size_t worker_buf_size = CHUNK * m * n_thrds;
+    size_t queue_buf_size = CHUNK * prefix_depth * (1 + Q_CAP);
+    vecss = malloc((worker_buf_size + queue_buf_size) * sizeof(size_t));
     assert(vecss);
   }
   *st = (proc_state_t){.mode = mode,

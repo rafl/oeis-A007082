@@ -25,6 +25,8 @@ void canon_iter_from_prefix(canon_iter_t *it, size_t m, size_t tot,
                             size_t *scratch, const size_t *prefix,
                             size_t prefix_depth);
 
+size_t canon_iter_depth_for(size_t m);
+
 size_t canon_iter_size(size_t, size_t);
 
 size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len);

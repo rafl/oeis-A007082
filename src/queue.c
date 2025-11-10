@@ -5,13 +5,14 @@
 #include <stdlib.h>
 #include <string.h>
 
-queue_t *queue_new(size_t n_args, size_t m, const void *iter_st, size_t st_len,
-                   size_t *vecs) {
+queue_t *queue_new(size_t n_args, size_t m, size_t prefix_depth,
+                   const void *iter_st, size_t st_len, size_t *vecs) {
   queue_t *q = malloc(sizeof(queue_t));
   assert(q);
   q->head = q->tail = q->fill = 0;
   q->cap = Q_CAP * CHUNK;
   q->m = m;
+  q->prefix_depth = prefix_depth;
   q->done = q->pause = false;
   pthread_mutex_init(&q->mu, NULL);
   pthread_cond_init(&q->not_empty, NULL);
@@ -22,9 +23,9 @@ queue_t *queue_new(size_t n_args, size_t m, const void *iter_st, size_t st_len,
   if (st_len)
     canon_iter_resume(&q->it, m, n_args, q->scratch, iter_st, st_len);
   else
-    canon_iter_new(&q->it, m, n_args, q->scratch, m);
+    canon_iter_new(&q->it, m, n_args, q->scratch, prefix_depth);
   q->vecs = vecs;
-  q->buf = &vecs[CHUNK * m];
+  q->buf = &vecs[CHUNK * prefix_depth];
 
   return q;
 }
@@ -37,7 +38,7 @@ void queue_free(queue_t *q) { free(q->scratch); }
 
 static inline void queue_push(queue_t *restrict q, const size_t *vecs,
                               size_t n_vec) {
-  size_t m = q->m;
+  size_t stride = q->prefix_depth;
   pthread_mutex_lock(&q->mu);
 
   while (q->fill + n_vec > q->cap)
@@ -46,10 +47,10 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
   size_t spc = q->cap - q->tail;
   size_t fst = (n_vec <= spc) ? n_vec : spc;
 
-  memcpy(&q->buf[q->tail * m], vecs, fst * m * sizeof(size_t));
+  memcpy(&q->buf[q->tail * stride], vecs, fst * stride * sizeof(size_t));
 
   if (fst < n_vec)
-    memcpy(q->buf, &vecs[fst * m], (n_vec - fst) * m * sizeof(size_t));
+    memcpy(q->buf, &vecs[fst * stride], (n_vec - fst) * stride * sizeof(size_t));
 
   q->tail = (q->tail + n_vec) % q->cap;
   q->fill += n_vec;
@@ -63,7 +64,7 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
 }
 
 size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
-  size_t m = q->m;
+  size_t stride = q->prefix_depth;
   pthread_mutex_lock(&q->mu);
 
   while (q->fill == 0 && !q->done) {
@@ -82,9 +83,9 @@ size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
   size_t spc = q->cap - q->head;
   size_t fst = n_vec <= spc ? n_vec : spc;
 
-  memcpy(out, &q->buf[q->head * m], fst * m * sizeof(size_t));
+  memcpy(out, &q->buf[q->head * stride], fst * stride * sizeof(size_t));
   if (fst < n_vec)
-    memcpy(out + fst * m, q->buf, (n_vec - fst) * m * sizeof(size_t));
+    memcpy(out + fst * stride, q->buf, (n_vec - fst) * stride * sizeof(size_t));
 
   q->head = (q->head + n_vec) % q->cap;
   q->fill -= n_vec;
@@ -99,7 +100,7 @@ void queue_fill(queue_t *restrict q) {
   for (;;) {
     size_t n_vec = 0;
     for (; n_vec < CHUNK; ++n_vec) {
-      if (!canon_iter_next(&q->it, &q->vecs[n_vec * q->m]))
+      if (!canon_iter_next(&q->it, &q->vecs[n_vec * q->prefix_depth]))
         break;
     }
 

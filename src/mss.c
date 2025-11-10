@@ -165,6 +165,11 @@ void canon_iter_from_prefix(canon_iter_t *it, size_t m, size_t tot,
   it->stage = ITER_STAGE_DESCEND;
 }
 
+// not tuned well yet
+size_t canon_iter_depth_for(size_t m) {
+  return (m - 1) / 2;
+}
+
 static size_t gcd(size_t a, size_t b) {
   while (b) {
     size_t t = a % b;
