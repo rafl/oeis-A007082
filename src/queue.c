@@ -22,7 +22,7 @@ queue_t *queue_new(size_t n_args, size_t m, const void *iter_st, size_t st_len,
   if (st_len)
     canon_iter_resume(&q->it, m, n_args, q->scratch, iter_st, st_len);
   else
-    canon_iter_new(&q->it, m, n_args, q->scratch);
+    canon_iter_new(&q->it, m, n_args, q->scratch, m);
   q->vecs = vecs;
   q->buf = &vecs[CHUNK * m];
 
