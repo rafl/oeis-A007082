@@ -5,17 +5,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch) {
+void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
+                    size_t depth) {
+  assert(depth >= 1 && depth <= m);
   it->m = m;
   it->tot = tot;
   it->scratch = scratch;
   memset(it->scratch, 0, (m + 1) * sizeof(size_t));
+  it->scratch[0] = tot;
 
   it->t = 1; // position
   it->p = 1; // period length
   it->sum = 0;
+  it->depth = depth;
+  it->start_depth = 0;
   it->stage = ITER_STAGE_DESCEND;
-  it->min_depth = 0;  // Start from root
 }
 
 // Bounded DFS to build frontier at specified depth
@@ -31,12 +35,7 @@ void canon_iter_frontier(canon_iter_t *it, size_t depth, void *save_buf,
     case ITER_STAGE_DESCEND: {
       // If we've reached the depth boundary, emit and backtrack
       if (it->t > depth) {
-        // Set min_depth so resumed iterator stops at this depth
-        size_t saved_min = it->min_depth;
-        it->min_depth = depth;
         size_t len = canon_iter_save(it, save_buf, save_buf_len);
-        it->min_depth = saved_min;  // Restore for frontier traversal
-
         emit_cb(save_buf, len, user);
         it->stage = ITER_STAGE_BACKTRACK;
         break;
@@ -87,20 +86,22 @@ void canon_iter_frontier(canon_iter_t *it, size_t depth, void *save_buf,
   }
 }
 
-// t p sum stage min_depth scratch...(m+1)
+// t p sum stage depth start_depth scratch...(m+1)
 size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len) {
-  size_t n = (5 + it->m + 1) * sizeof(uint64_t);
+  size_t n = (6 + it->m + 1) * sizeof(uint64_t);
   assert(len >= n);
   uint64_t *out = buf;
-  memcpy(out, (uint64_t[]){it->t, it->p, it->sum, it->stage, it->min_depth},
-         5 * sizeof(uint64_t));
-  memcpy(out + 5, it->scratch, (it->m + 1) * sizeof(uint64_t));
+  memcpy(out,
+         (uint64_t[]){it->t, it->p, it->sum, it->stage, it->depth,
+                      it->start_depth},
+         6 * sizeof(uint64_t));
+  memcpy(out + 6, it->scratch, (it->m + 1) * sizeof(uint64_t));
   return n;
 }
 
 void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
                        const void *buf, size_t len) {
-  assert(len >= (5 + m + 1) * sizeof(uint64_t));
+  assert(len >= (6 + m + 1) * sizeof(uint64_t));
   const uint64_t *in = buf;
   it->m = m;
   it->tot = tot;
@@ -108,9 +109,10 @@ void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
   it->p = in[1];
   it->sum = in[2];
   it->stage = in[3];
-  it->min_depth = in[4];
+  it->depth = in[4];
+  it->start_depth = in[5];
   it->scratch = scratch;
-  memcpy(it->scratch, in + 5, (m + 1) * sizeof(uint64_t));
+  memcpy(it->scratch, in + 6, (m + 1) * sizeof(uint64_t));
 }
 
 bool canon_iter_next(canon_iter_t *it, size_t *vec) {
@@ -121,14 +123,29 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
   for (;;) {
     switch (it->stage) {
     case ITER_STAGE_DESCEND: {
-      if (it->t > m) { // leaf
+      if (it->t == it->depth + 1) {
         it->stage = ITER_STAGE_BACKTRACK;
-        if (m % it->p == 0 && it->sum == tot) {
-          vec[0] = a[m];
-          memcpy(vec + 1, a + 1, (m - 1) * sizeof(size_t));
+        if (it->depth == m) {
+          if (m % it->p == 0 && it->sum == tot) {
+            memcpy(vec, a + 1, it->depth * sizeof(size_t));
+            return true;
+          }
+          break;
+        }
+        // For prefixes, check if subtree could contain valid necklaces
+        if (a[1] * (m - it->depth) >= (tot - it->sum)) {
+          memcpy(vec, a + 1, it->depth * sizeof(size_t));
           return true;
         }
         break;
+      }
+
+      if (it->t >= 2) {
+        // Prune if first element is too small to reach tot
+        if (a[1] * (m - it->t + 1) < (tot - it->sum)) {
+          it->stage = ITER_STAGE_BACKTRACK;
+          break;
+        }
       }
 
       size_t v = a[it->t - it->p];
@@ -140,7 +157,7 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
       }
 
       it->stage = ITER_STAGE_LOOP;
-      a[it->t] = v + 1;
+      a[it->t] = tot - it->sum;
       break;
     }
 
@@ -160,15 +177,65 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
 
     case ITER_STAGE_BACKTRACK:
       --it->t;
-      if (it->t <= it->min_depth)
-        return false;  // Stop at minimum depth
+      if (it->t <= it->start_depth)
+        return false;  // Stop at start depth
 
       it->sum -= a[it->t];
-      a[it->t] += 1;
+      if (a[it->t] == 0) {
+        break;
+      }
+      --a[it->t];
       it->stage = ITER_STAGE_LOOP;
       break;
     }
   }
+}
+
+void canon_iter_from_prefix(canon_iter_t *it, size_t m, size_t tot,
+                            size_t *scratch, const size_t *prefix,
+                            size_t prefix_depth) {
+  assert(prefix_depth >= 1 && prefix_depth < m);
+  it->m = m;
+  it->tot = tot;
+  it->scratch = scratch;
+
+  it->scratch[0] = prefix[0];
+  memcpy(it->scratch + 1, prefix, prefix_depth * sizeof(size_t));
+  memset(it->scratch + prefix_depth + 1, 0,
+         (m - prefix_depth) * sizeof(size_t));
+
+  it->sum = 0;
+  for (size_t i = 1; i <= prefix_depth; ++i) {
+    it->sum += it->scratch[i];
+  }
+
+  it->t = prefix_depth + 1;
+
+  // Compute period from prefix
+  it->p = 1;
+  for (size_t p = 1; p <= prefix_depth; ++p) {
+    bool matches = true;
+    for (size_t i = p + 1; i <= prefix_depth; ++i) {
+      if (it->scratch[i] != it->scratch[i - p]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) {
+      it->p = p;
+      break;
+    }
+  }
+
+  it->depth = m;
+  it->start_depth = prefix_depth;
+  it->stage = ITER_STAGE_DESCEND;
+}
+
+// Heuristic for choosing prefix depth
+// not tuned well yet
+size_t canon_iter_depth_for(size_t m) {
+  return (m - 1) / 2;
 }
 
 static size_t gcd(size_t a, size_t b) {

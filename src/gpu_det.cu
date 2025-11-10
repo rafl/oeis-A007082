@@ -610,11 +610,11 @@ bool gpu_det_available(void) {
   // Print GPU info on first call
   static bool printed = false;
   if (!printed) {
-    printf("Found %d GPU%s:\n", device_count, device_count > 1 ? "s" : "");
+    fprintf(stderr, "Found %d GPU%s:\n", device_count, device_count > 1 ? "s" : "");
     for (int i = 0; i < device_count; i++) {
       cudaDeviceProp prop;
       cudaGetDeviceProperties(&prop, i);
-      printf("  GPU %d: %s (SM count: %d, Max threads per block: %d)\n",
+      fprintf(stderr, "  GPU %d: %s (SM count: %d, Max threads per block: %d)\n",
              i, prop.name, prop.multiProcessorCount, prop.maxThreadsPerBlock);
     }
     printed = true;

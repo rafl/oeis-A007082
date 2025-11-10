@@ -629,6 +629,7 @@ typedef struct {
   pthread_mutex_t *acc_mu;
   bool idle;
   int device_id;  // GPU device ID for this worker
+  size_t prefix_depth;
 } worker_t;
 
 static void w_resume(void *ud) {
@@ -646,7 +647,7 @@ static resume_cb_t w_idle(void *ud) {
   return w_resume;
 }
 
-// thread function for doing work on the "maths stuff"
+// thread function for doing work on the "maths stuff" - CPU version with local iterators
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
   uint64_t (*f)(uint64_t *, const prim_ctx_t *) = worker->f;
@@ -654,22 +655,38 @@ static void *residue_for_prime(void *ud) {
   uint64_t m = ctx->m, p = ctx->p,
            l_acc = 0; // l_acc is where we're going to accumulate the total
                       // residual from the stuff we pull from our work queue
-  size_t *vecs = worker->vecs;
+  size_t *prefix_buf = worker->vecs;
+  size_t prefix_depth = worker->prefix_depth;
+  size_t n_args = ctx->n_args;
   worker->l_acc = &l_acc;
 
+  size_t sub_scratch[m + 1], full_vec[m], necklace_count = 0;
+
   for (;;) {
-    size_t n_vec = queue_pop(worker->q, vecs, w_idle, worker);
+    size_t n_vec = queue_pop(worker->q, prefix_buf, w_idle, worker);
     if (!n_vec)
       break;
 
     for (size_t c = 0; c < n_vec; ++c) {
-      // each vector has len m
-      // each vector contains the multiplicity with which each power of omega
-      // appears in the args i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7 lots of
-      // w^2
-      l_acc = add_mod_u64(l_acc, f(&vecs[c * m], ctx), p);
+      size_t *prefix = &prefix_buf[c * prefix_depth];
+
+      // Create local iterator from this prefix
+      canon_iter_t sub_iter;
+      canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,
+                             prefix_depth);
+
+      // Iterate through all full vectors for this prefix
+      while (canon_iter_next(&sub_iter, full_vec)) {
+        // each vector has len m
+        // each vector contains the multiplicity with which each power of omega
+        // appears in the args i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7
+        // lots of w^2
+        l_acc = add_mod_u64(l_acc, f(full_vec, ctx), p);
+        ++necklace_count;
+      }
     }
-    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+    atomic_fetch_add_explicit(worker->done, necklace_count, memory_order_relaxed);
+    necklace_count = 0;
   }
 
   (void)w_idle(worker);
@@ -677,6 +694,10 @@ static void *residue_for_prime(void *ud) {
 }
 
 #ifdef USE_GPU
+// GPU batch size - independent of queue CHUNK size
+// Controls how many full vectors are sent to GPU at once
+#define GPU_BATCH_SIZE (1UL << 12)
+
 // Helper to post-process a batch of results
 static void process_batch_results(worker_t *worker, vec_batch_t *batch,
                                    size_t n_vec, uint64_t *l_acc) {
@@ -693,11 +714,13 @@ static void process_batch_results(worker_t *worker, vec_batch_t *batch,
   atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
 }
 
-// GPU-accelerated worker with double-buffered batching
+// GPU-accelerated worker with prefix-based batching
 static void *residue_for_prime_gpu(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t m = ctx->m, l_acc = 0;
+  size_t n_args = ctx->n_args;
+  size_t prefix_depth = worker->prefix_depth;
   worker->l_acc = &l_acc;
 
   // Set GPU device for this worker
@@ -713,36 +736,73 @@ static void *residue_for_prime_gpu(void *ud) {
   // More buffers = more in-flight work = better GPU utilization
   #define NUM_BUFFERS 4
   vec_batch_t *batches[NUM_BUFFERS];
-  size_t *vecs_buffers[NUM_BUFFERS];
+  size_t *full_vecs_buffers[NUM_BUFFERS];
   size_t n_vecs[NUM_BUFFERS];
 
   for (int i = 0; i < NUM_BUFFERS; i++) {
-    batches[i] = vec_batch_new(CHUNK, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
+    batches[i] = vec_batch_new(GPU_BATCH_SIZE, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
                                 ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
                                 ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
                                 ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
                                 ctx->m_half, n_rs, is_jack_mode);
-    vecs_buffers[i] = (i == 0) ? worker->vecs : malloc(CHUNK * m * sizeof(size_t));
+    full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
     n_vecs[i] = 0;
   }
 
+  // Allocate buffers for prefix expansion
+  size_t *prefix_buf = worker->vecs;
+  size_t sub_scratch[m + 1];
+  size_t full_vec[m];
+
   int current = 0;
   int in_flight = 0;  // How many batches are currently in flight on GPU
+  bool queue_done = false;
+  size_t n_prefixes = 0, prefix_idx = 0;
+  bool iter_active = false;  // Track if we have a partial iterator
+  canon_iter_t sub_iter;     // Persistent iterator across batches
+
+  // Helper macro to fill a GPU batch from prefixes
+  #define FILL_BATCH(buf_idx, result_var) do { \
+    vec_batch_clear(batches[buf_idx]); \
+    n_vecs[buf_idx] = 0; \
+    \
+    while (n_vecs[buf_idx] < GPU_BATCH_SIZE && !queue_done) { \
+      if (!iter_active) { \
+        if (prefix_idx >= n_prefixes) { \
+          n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker); \
+          prefix_idx = 0; \
+          if (n_prefixes == 0) { \
+            queue_done = true; \
+            break; \
+          } \
+        } \
+        \
+        size_t *prefix = &prefix_buf[prefix_idx * prefix_depth]; \
+        canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix, prefix_depth); \
+        iter_active = true; \
+      } \
+      \
+      if (canon_iter_next(&sub_iter, full_vec)) { \
+        memcpy(&full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m], full_vec, m * sizeof(size_t)); \
+        vec_batch_add(batches[buf_idx], &full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m]); \
+        n_vecs[buf_idx]++; \
+      } else { \
+        iter_active = false; \
+        prefix_idx++; \
+      } \
+    } \
+    \
+    result_var = (n_vecs[buf_idx] > 0); \
+  } while(0)
 
   for (;;) {
     // Fill up the pipeline initially
     while (in_flight < NUM_BUFFERS) {
-      n_vecs[current] = queue_pop(worker->q, vecs_buffers[current], w_idle, worker);
-
-      if (n_vecs[current] == 0) {
-        // Queue is empty
+      bool has_work;
+      FILL_BATCH(current, has_work);
+      if (!has_work) {
+        // No more work
         break;
-      }
-
-      // Add vectors to current batch
-      vec_batch_clear(batches[current]);
-      for (size_t c = 0; c < n_vecs[current]; ++c) {
-        vec_batch_add(batches[current], &vecs_buffers[current][c * m]);
       }
 
       // Launch async GPU compute on current batch (returns immediately)
@@ -766,10 +826,10 @@ static void *residue_for_prime_gpu(void *ud) {
     process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
     in_flight--;
 
-    // Pop new work and launch it
-    n_vecs[current] = queue_pop(worker->q, vecs_buffers[current], w_idle, worker);
-
-    if (n_vecs[current] == 0) {
+    // Try to fill and launch a new batch
+    bool has_work;
+    FILL_BATCH(current, has_work);
+    if (!has_work) {
       // No more work, drain remaining in-flight batches
       while (in_flight > 0) {
         oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
@@ -780,12 +840,6 @@ static void *residue_for_prime_gpu(void *ud) {
       break;
     }
 
-    // Add vectors to current batch
-    vec_batch_clear(batches[current]);
-    for (size_t c = 0; c < n_vecs[current]; ++c) {
-      vec_batch_add(batches[current], &vecs_buffers[current][c * m]);
-    }
-
     // Launch async GPU compute on current batch
     vec_batch_compute_async(batches[current]);
     in_flight++;
@@ -794,8 +848,9 @@ static void *residue_for_prime_gpu(void *ud) {
 
   for (int i = 0; i < NUM_BUFFERS; i++) {
     vec_batch_free(batches[i]);
-    if (i > 0) free(vecs_buffers[i]);
+    free(full_vecs_buffers[i]);
   }
+  #undef FILL_BATCH
   #undef NUM_BUFFERS
 
   (void)w_idle(worker);
@@ -857,8 +912,10 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (done == siz)
     return ret(st, ctx, acc, res, p_ret);
 
+  size_t prefix_depth = canon_iter_depth_for(m);
+
   // shared work queue
-  queue_t *q = queue_new(st->n_args, m, iter_st, st_len,
+  queue_t *q = queue_new(st->n_args, m, prefix_depth, iter_st, st_len,
                          &st->vecss[st->n_thrds * CHUNK * m]);
 
   progress_t prog;
@@ -897,6 +954,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .idle = false,
                            .acc = &acc,
                            .acc_mu = &acc_mu,
+                           .prefix_depth = prefix_depth,
 #ifdef USE_GPU
                            .device_id = use_gpu ? (int)(i % n_gpus) : 0
 #else
@@ -912,21 +970,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   if (st->snapshot)
     snapshot_start(&ss, st->mode, n, p, n_workers, q, idles, &done, &acc);
 
-  // Use frontier-based parallel generation
-  // With GPU: use remaining threads as producers (st->n_thrds - n_workers)
-  size_t n_producers;
-#ifdef USE_GPU
-  if (use_gpu) {
-    n_producers = st->n_thrds - n_workers;
-    if (n_producers < 2) n_producers = 2;  // Always at least 2 producers
-  } else {
-    n_producers = st->n_thrds < 4 ? 1 : 3;
-  }
-#else
-  n_producers = st->n_thrds < 4 ? 1 : 3;
-#endif
-  size_t depth = 5;
-  queue_fill_parallel(q, n_producers, depth);
+  queue_fill(q);
 
   for (size_t i = 0; i < n_workers; ++i)
     pthread_join(worker[i], NULL);
@@ -975,9 +1019,12 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);
   size_t n_thrds = get_num_threads();
+  size_t prefix_depth = canon_iter_depth_for(m);
   bool borrowed = vecss;
   if (!vecss) {
-    vecss = malloc(CHUNK * m * (n_thrds + 1 + Q_CAP) * sizeof(size_t));
+    size_t worker_buf_size = CHUNK * m * n_thrds;
+    size_t queue_buf_size = CHUNK * prefix_depth * (1 + Q_CAP);
+    vecss = malloc((worker_buf_size + queue_buf_size) * sizeof(size_t));
     assert(vecss);
   }
   *st = (proc_state_t){.mode = mode,
