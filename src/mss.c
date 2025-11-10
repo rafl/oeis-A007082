@@ -75,6 +75,13 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
         break;
       }
 
+      if (it->t >= 2) {
+        if (a[1] * (m - it->t + 1) < (tot - it->sum)) {
+          it->stage = ITER_STAGE_BACKTRACK;
+          break;
+        }
+      }
+
       size_t v = a[it->t - it->p];
       if (it->sum + v <= tot) {
         a[it->t] = v;
