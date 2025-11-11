@@ -702,6 +702,15 @@ static void *residue_for_prime(void *ud) {
 // Controls how many full vectors are sent to GPU at once
 #define GPU_BATCH_SIZE (1UL << 12)
 
+// Compute matrix size (number of non-zero elements in coefficient vector)
+static inline size_t compute_matrix_size(const size_t *vec, size_t m) {
+  size_t r = 0;
+  for (size_t i = 0; i < m; ++i) {
+    if (vec[i]) r++;
+  }
+  return r;
+}
+
 // Helper to post-process a batch of results
 static void process_batch_results(worker_t *worker, vec_batch_t *batch,
                                    size_t n_vec, uint64_t *l_acc) {
@@ -718,7 +727,7 @@ static void process_batch_results(worker_t *worker, vec_batch_t *batch,
   atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
 }
 
-// GPU-accelerated worker with prefix-based batching
+// GPU-accelerated worker with size-based batching + quad buffering
 static void *residue_for_prime_gpu(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
@@ -734,18 +743,26 @@ static void *residue_for_prime_gpu(void *ud) {
   cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
 
   // Create 4 GPU batches for quad buffering using shared context
-  // More buffers = more in-flight work = better GPU utilization
   #define NUM_BUFFERS 4
   vec_batch_t *batches[NUM_BUFFERS];
   size_t *full_vecs_buffers[NUM_BUFFERS];
   size_t n_vecs[NUM_BUFFERS];
 
-  // Each worker gets NUM_BUFFERS consecutive batch indices from the shared pool
   size_t batch_start = worker->worker_id * NUM_BUFFERS;
   for (int i = 0; i < NUM_BUFFERS; i++) {
     batches[i] = vec_batch_new(worker->gpu_shared, batch_start + i);
     full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
     n_vecs[i] = 0;
+  }
+
+  // CPU-side staging buffers: one per matrix size (m+1 possible sizes)
+  // Route vectors by size, then when any buffer fills, hand to GPU pipeline
+  size_t num_size_buckets = m + 1;
+  size_t **size_staging_buffers = malloc(num_size_buckets * sizeof(size_t *));
+  size_t *size_counts = calloc(num_size_buckets, sizeof(size_t));
+
+  for (size_t sz = 0; sz < num_size_buckets; sz++) {
+    size_staging_buffers[sz] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
   }
 
   // Allocate buffers for prefix expansion
@@ -754,102 +771,109 @@ static void *residue_for_prime_gpu(void *ud) {
   size_t full_vec[m];
 
   int current = 0;
-  int in_flight = 0;  // How many batches are currently in flight on GPU
+  int in_flight = 0;
   bool queue_done = false;
   size_t n_prefixes = 0, prefix_idx = 0;
-  bool iter_active = false;  // Track if we have a partial iterator
-  canon_iter_t sub_iter;     // Persistent iterator across batches
+  bool iter_active = false;
+  canon_iter_t sub_iter;
 
-  // Helper macro to fill a GPU batch from prefixes
-  #define FILL_BATCH(buf_idx, result_var) do { \
-    vec_batch_clear(batches[buf_idx]); \
-    n_vecs[buf_idx] = 0; \
-    \
-    while (n_vecs[buf_idx] < GPU_BATCH_SIZE && !queue_done) { \
-      if (!iter_active) { \
-        if (prefix_idx >= n_prefixes) { \
-          n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker); \
-          prefix_idx = 0; \
-          if (n_prefixes == 0) { \
-            queue_done = true; \
-            break; \
-          } \
-        } \
-        \
-        size_t *prefix = &prefix_buf[prefix_idx * prefix_depth]; \
-        canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix, prefix_depth); \
-        iter_active = true; \
+  // Helper: flush a size-specific staging buffer to the GPU pipeline
+  #define FLUSH_SIZE_BUFFER(sz) do { \
+    if (size_counts[sz] > 0) { \
+      vec_batch_clear(batches[current]); \
+      n_vecs[current] = 0; \
+      for (size_t i = 0; i < size_counts[sz]; i++) { \
+        memcpy(&full_vecs_buffers[current][i * m], \
+               &size_staging_buffers[sz][i * m], m * sizeof(size_t)); \
+        vec_batch_add(batches[current], &full_vecs_buffers[current][i * m]); \
       } \
-      \
-      if (canon_iter_next(&sub_iter, full_vec)) { \
-        memcpy(&full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m], full_vec, m * sizeof(size_t)); \
-        vec_batch_add(batches[buf_idx], &full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m]); \
-        n_vecs[buf_idx]++; \
-      } else { \
-        iter_active = false; \
-        prefix_idx++; \
-      } \
+      n_vecs[current] = size_counts[sz]; \
+      vec_batch_compute_async(batches[current]); \
+      in_flight++; \
+      current = (current + 1) % NUM_BUFFERS; \
+      size_counts[sz] = 0; \
     } \
-    \
-    result_var = (n_vecs[buf_idx] > 0); \
   } while(0)
 
   for (;;) {
-    // Fill up the pipeline initially
-    while (in_flight < NUM_BUFFERS) {
-      bool has_work;
-      FILL_BATCH(current, has_work);
-      if (!has_work) {
-        // No more work
-        break;
+    // Generate vectors and route by size
+    while (!queue_done) {
+      // Get next vector
+      if (!iter_active) {
+        if (prefix_idx >= n_prefixes) {
+          n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);
+          prefix_idx = 0;
+          if (n_prefixes == 0) {
+            queue_done = true;
+            break;
+          }
+        }
+        size_t *prefix = &prefix_buf[prefix_idx * prefix_depth];
+        canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix, prefix_depth);
+        iter_active = true;
       }
 
-      // Launch async GPU compute on current batch (returns immediately)
-      vec_batch_compute_async(batches[current]);
-      in_flight++;
-      current = (current + 1) % NUM_BUFFERS;
+      if (canon_iter_next(&sub_iter, full_vec)) {
+        // Route to size-specific staging buffer
+        size_t matrix_size = compute_matrix_size(full_vec, m);
+        memcpy(&size_staging_buffers[matrix_size][size_counts[matrix_size] * m],
+               full_vec, m * sizeof(size_t));
+        size_counts[matrix_size]++;
+
+        // If this buffer is full, flush it to GPU
+        if (size_counts[matrix_size] >= GPU_BATCH_SIZE) {
+          FLUSH_SIZE_BUFFER(matrix_size);
+        }
+
+        // If pipeline is full, drain oldest batch
+        if (in_flight >= NUM_BUFFERS) {
+          int oldest = (current - NUM_BUFFERS + NUM_BUFFERS) % NUM_BUFFERS;
+          vec_batch_wait(batches[oldest]);
+          process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
+          in_flight--;
+        }
+      } else {
+        iter_active = false;
+        prefix_idx++;
+      }
     }
 
-    if (in_flight == 0) {
-      // Never got any work
-      break;
-    }
+    // Flush all remaining staging buffers
+    for (size_t sz = 0; sz < num_size_buckets; sz++) {
+      FLUSH_SIZE_BUFFER(sz);
 
-    // Now process the oldest batch (which should be done or nearly done)
-    int oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
-
-    // Wait for oldest batch to complete
-    vec_batch_wait(batches[oldest]);
-
-    // Process its results
-    process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
-    in_flight--;
-
-    // Try to fill and launch a new batch
-    bool has_work;
-    FILL_BATCH(current, has_work);
-    if (!has_work) {
-      // No more work, drain remaining in-flight batches
-      while (in_flight > 0) {
-        oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
+      // Drain if pipeline gets full
+      while (in_flight >= NUM_BUFFERS) {
+        int oldest = (current - NUM_BUFFERS + NUM_BUFFERS) % NUM_BUFFERS;
         vec_batch_wait(batches[oldest]);
         process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
         in_flight--;
       }
-      break;
     }
 
-    // Launch async GPU compute on current batch
-    vec_batch_compute_async(batches[current]);
-    in_flight++;
-    current = (current + 1) % NUM_BUFFERS;
+    // Drain remaining in-flight batches
+    while (in_flight > 0) {
+      int oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
+      vec_batch_wait(batches[oldest]);
+      process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
+      in_flight--;
+    }
+
+    break;
   }
 
+  // Cleanup
   for (int i = 0; i < NUM_BUFFERS; i++) {
     vec_batch_free(batches[i]);
     free(full_vecs_buffers[i]);
   }
-  #undef FILL_BATCH
+  for (size_t sz = 0; sz < num_size_buckets; sz++) {
+    free(size_staging_buffers[sz]);
+  }
+  free(size_staging_buffers);
+  free(size_counts);
+
+  #undef FLUSH_SIZE_BUFFER
   #undef NUM_BUFFERS
 
   (void)w_idle(worker);
