@@ -630,6 +630,9 @@ typedef struct {
   bool idle;
   int device_id;  // GPU device ID for this worker
   size_t prefix_depth;
+#ifdef USE_GPU
+  gpu_shared_ctx_t *gpu_shared;  // Shared GPU context (NULL for CPU workers)
+#endif
 } worker_t;
 
 static void w_resume(void *ud) {
@@ -729,13 +732,7 @@ static void *residue_for_prime_gpu(void *ud) {
   // Use blocking sync instead of busy-wait to avoid wasting CPU cycles
   cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
 
-  // Determine if we're in jack mode
-  bool is_jack_mode = (worker->f != david);
-
-  // Calculate n_rs (same formula as in prim_ctx_new)
-  size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
-
-  // Create 4 GPU batches for quad buffering with all lookup tables
+  // Create 4 GPU batches for quad buffering using shared context
   // More buffers = more in-flight work = better GPU utilization
   #define NUM_BUFFERS 4
   vec_batch_t *batches[NUM_BUFFERS];
@@ -743,11 +740,7 @@ static void *residue_for_prime_gpu(void *ud) {
   size_t n_vecs[NUM_BUFFERS];
 
   for (int i = 0; i < NUM_BUFFERS; i++) {
-    batches[i] = vec_batch_new(GPU_BATCH_SIZE, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
-                                ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
-                                ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
-                                ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
-                                ctx->m_half, n_rs, is_jack_mode);
+    batches[i] = vec_batch_new(GPU_BATCH_SIZE, worker->gpu_shared);
     full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
     n_vecs[i] = 0;
   }
@@ -934,9 +927,25 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 #ifdef USE_GPU
   bool use_gpu = gpu_det_available();
   int n_gpus = use_gpu ? gpu_det_device_count() : 0;
+
+  // Create shared GPU contexts (one per GPU) with constant lookup tables
+  gpu_shared_ctx_t *gpu_shared_ctxs[n_gpus];
+  if (use_gpu) {
+    bool is_jack_mode = (fn == jack);
+    size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
+    for (int gpu_id = 0; gpu_id < n_gpus; ++gpu_id) {
+      gpu_shared_ctxs[gpu_id] = gpu_shared_ctx_new(
+          gpu_id, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
+          ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
+          ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
+          ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
+          ctx->m_half, n_rs, is_jack_mode);
+    }
+  }
+
   // With GPU: use fewer workers (2-3 per GPU) to reduce queue contention
   // Remaining threads will be producers
-  size_t n_workers = use_gpu ? ((size_t)n_gpus * 3) : st->n_thrds;
+  size_t n_workers = use_gpu ? ((size_t)n_gpus * 4) : st->n_thrds;
   if (n_workers > st->n_thrds) n_workers = st->n_thrds;
   void *(*worker_fn)(void *) = use_gpu ? residue_for_prime_gpu : residue_for_prime;
 #else
@@ -959,7 +968,8 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .acc_mu = &acc_mu,
                            .prefix_depth = prefix_depth,
 #ifdef USE_GPU
-                           .device_id = use_gpu ? (int)(i % n_gpus) : 0
+                           .device_id = use_gpu ? (int)(i % n_gpus) : 0,
+                           .gpu_shared = use_gpu ? gpu_shared_ctxs[i % n_gpus] : NULL
 #else
                            .device_id = 0
 #endif
@@ -977,6 +987,15 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   for (size_t i = 0; i < n_workers; ++i)
     pthread_join(worker[i], NULL);
+
+#ifdef USE_GPU
+  // Free shared GPU contexts
+  if (use_gpu) {
+    for (int gpu_id = 0; gpu_id < n_gpus; ++gpu_id) {
+      gpu_shared_ctx_free(gpu_shared_ctxs[gpu_id]);
+    }
+  }
+#endif
 
   queue_free(q);
   if (st->snapshot)

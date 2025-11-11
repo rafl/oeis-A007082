@@ -18,18 +18,30 @@ int gpu_det_device_count(void);
 typedef struct det_batch_t det_batch_t;
 typedef struct vec_batch_t vec_batch_t;
 
+// Opaque shared GPU context (constant lookup tables, shared across batches on same GPU)
+typedef struct gpu_shared_ctx_t gpu_shared_ctx_t;
+
+// === Shared GPU Context API ===
+
+// Create shared GPU context with constant lookup tables for a specific device
+// This should be allocated once per GPU and shared across all batches on that GPU
+gpu_shared_ctx_t *gpu_shared_ctx_new(int device_id, uint64_t n, uint64_t n_args, uint64_t m,
+                                      uint64_t p, uint64_t p_dash, uint64_t r, uint64_t r3,
+                                      const uint64_t *jk_prod_M, const uint64_t *nat_M,
+                                      const uint64_t *nat_inv_M, const uint64_t *ws_M,
+                                      const uint64_t *jk_sums_M, const uint64_t *jk_sums_pow_lower_M,
+                                      const uint64_t *jk_sums_pow_upper_M, const uint64_t *rs,
+                                      const uint64_t *fact_M, const uint64_t *fact_inv_M,
+                                      size_t m_half, size_t n_rs, bool is_jack_mode);
+
+// Free shared GPU context
+void gpu_shared_ctx_free(gpu_shared_ctx_t *ctx);
+
 // === Vector-based API (builds matrices on GPU, much faster) ===
 
 // Create a vector batch for processing coefficient vectors on GPU
-// Now includes all lookup tables for full computation
-vec_batch_t *vec_batch_new(size_t max_vecs, uint64_t n, uint64_t n_args, uint64_t m,
-                            uint64_t p, uint64_t p_dash, uint64_t r, uint64_t r3,
-                            const uint64_t *jk_prod_M, const uint64_t *nat_M,
-                            const uint64_t *nat_inv_M, const uint64_t *ws_M,
-                            const uint64_t *jk_sums_M, const uint64_t *jk_sums_pow_lower_M,
-                            const uint64_t *jk_sums_pow_upper_M, const uint64_t *rs,
-                            const uint64_t *fact_M, const uint64_t *fact_inv_M,
-                            size_t m_half, size_t n_rs, bool is_jack_mode);
+// Uses shared context for constant lookup tables
+vec_batch_t *vec_batch_new(size_t max_vecs, gpu_shared_ctx_t *shared_ctx);
 
 // Add a coefficient vector to the batch
 size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
