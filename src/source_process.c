@@ -726,6 +726,9 @@ static void *residue_for_prime_gpu(void *ud) {
   // Set GPU device for this worker
   cudaSetDevice(worker->device_id);
 
+  // Use blocking sync instead of busy-wait to avoid wasting CPU cycles
+  cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+
   // Determine if we're in jack mode
   bool is_jack_mode = (worker->f != david);
 
