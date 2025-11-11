@@ -630,6 +630,7 @@ typedef struct {
   bool idle;
   int device_id;  // GPU device ID for this worker
   size_t prefix_depth;
+  size_t worker_id;  // Unique worker index (for batch allocation)
 #ifdef USE_GPU
   gpu_shared_ctx_t *gpu_shared;  // Shared GPU context (NULL for CPU workers)
 #endif
@@ -739,8 +740,10 @@ static void *residue_for_prime_gpu(void *ud) {
   size_t *full_vecs_buffers[NUM_BUFFERS];
   size_t n_vecs[NUM_BUFFERS];
 
+  // Each worker gets NUM_BUFFERS consecutive batch indices from the shared pool
+  size_t batch_start = worker->worker_id * NUM_BUFFERS;
   for (int i = 0; i < NUM_BUFFERS; i++) {
-    batches[i] = vec_batch_new(GPU_BATCH_SIZE, worker->gpu_shared);
+    batches[i] = vec_batch_new(worker->gpu_shared, batch_start + i);
     full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
     n_vecs[i] = 0;
   }
@@ -928,18 +931,21 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   bool use_gpu = gpu_det_available();
   int n_gpus = use_gpu ? gpu_det_device_count() : 0;
 
-  // Create shared GPU contexts (one per GPU) with constant lookup tables
+  // Create shared GPU contexts (one per GPU) with constant lookup tables and buffer pools
   gpu_shared_ctx_t *gpu_shared_ctxs[n_gpus];
   if (use_gpu) {
     bool is_jack_mode = (fn == jack);
     size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
+    // Allocate enough batches for all threads (worst case all on one GPU)
+    // Each worker needs NUM_BUFFERS (4) batches
+    size_t max_batches = st->n_thrds * 4;
     for (int gpu_id = 0; gpu_id < n_gpus; ++gpu_id) {
       gpu_shared_ctxs[gpu_id] = gpu_shared_ctx_new(
           gpu_id, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
           ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
           ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
           ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
-          ctx->m_half, n_rs, is_jack_mode);
+          ctx->m_half, n_rs, is_jack_mode, max_batches, GPU_BATCH_SIZE);
     }
   }
 
@@ -967,6 +973,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .acc = &acc,
                            .acc_mu = &acc_mu,
                            .prefix_depth = prefix_depth,
+                           .worker_id = i,
 #ifdef USE_GPU
                            .device_id = use_gpu ? (int)(i % n_gpus) : 0,
                            .gpu_shared = use_gpu ? gpu_shared_ctxs[i % n_gpus] : NULL

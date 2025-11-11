@@ -798,6 +798,15 @@ struct gpu_shared_ctx_t {
 
   // Montgomery parameters (constant per prime)
   uint64_t p, p_dash, r, r3;
+
+  // Pre-allocated buffer pools for all batches on this GPU
+  // Allocated as single large buffers, sliced up per-batch
+  size_t max_batches;        // Maximum number of batches this GPU will handle
+  size_t batch_size;         // Vectors per batch (GPU_BATCH_SIZE)
+  uint64_t *h_vecs_pool;     // Pinned host memory for all batch inputs
+  uint64_t *h_results_pool;  // Pinned host memory for all batch results
+  uint64_t *d_vecs_pool;     // Device memory for all batch inputs
+  uint64_t *d_results_pool;  // Device memory for all batch results
 };
 
 struct vec_batch_t {
@@ -827,7 +836,8 @@ gpu_shared_ctx_t *gpu_shared_ctx_new(int device_id, uint64_t n, uint64_t n_args,
                                       const uint64_t *jk_sums_M, const uint64_t *jk_sums_pow_lower_M,
                                       const uint64_t *jk_sums_pow_upper_M, const uint64_t *rs,
                                       const uint64_t *fact_M, const uint64_t *fact_inv_M,
-                                      size_t m_half, size_t n_rs, bool is_jack_mode) {
+                                      size_t m_half, size_t n_rs, bool is_jack_mode,
+                                      size_t max_batches, size_t batch_size) {
   gpu_shared_ctx_t *ctx = (gpu_shared_ctx_t *)malloc(sizeof(gpu_shared_ctx_t));
   assert(ctx);
 
@@ -886,6 +896,19 @@ gpu_shared_ctx_t *gpu_shared_ctx_new(int device_id, uint64_t n, uint64_t n_args,
   CUDA_CHECK(cudaMemcpy(ctx->d_fact_M, fact_M, (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_fact_inv_M, fact_inv_M, (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
 
+  // Store buffer pool parameters
+  ctx->max_batches = max_batches;
+  ctx->batch_size = batch_size;
+
+  // Allocate buffer pools for all batches that will use this GPU
+  // Single large allocations, will be sliced per-batch
+  size_t total_vecs = max_batches * batch_size;
+
+  CUDA_CHECK(cudaMallocHost(&ctx->h_vecs_pool, total_vecs * m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMallocHost(&ctx->h_results_pool, total_vecs * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_vecs_pool, total_vecs * m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_results_pool, total_vecs * sizeof(uint64_t)));
+
   return ctx;
 }
 
@@ -907,12 +930,19 @@ void gpu_shared_ctx_free(gpu_shared_ctx_t *ctx) {
   cudaFree(ctx->d_fact_M);
   cudaFree(ctx->d_fact_inv_M);
 
+  // Free buffer pools
+  cudaFreeHost(ctx->h_vecs_pool);
+  cudaFreeHost(ctx->h_results_pool);
+  cudaFree(ctx->d_vecs_pool);
+  cudaFree(ctx->d_results_pool);
+
   free(ctx);
 }
 
-vec_batch_t *vec_batch_new(size_t max_vecs, gpu_shared_ctx_t *shared_ctx) {
+vec_batch_t *vec_batch_new(gpu_shared_ctx_t *shared_ctx, size_t batch_index) {
   vec_batch_t *batch = (vec_batch_t *)malloc(sizeof(vec_batch_t));
   assert(batch);
+  assert(batch_index < shared_ctx->max_batches);
 
   // Set device
   cudaSetDevice(shared_ctx->device_id);
@@ -920,21 +950,20 @@ vec_batch_t *vec_batch_new(size_t max_vecs, gpu_shared_ctx_t *shared_ctx) {
   // Reference shared context
   batch->shared = shared_ctx;
 
-  batch->max_vecs = max_vecs;
+  batch->max_vecs = shared_ctx->batch_size;
   batch->count = 0;
 
-  // Allocate pinned host memory for faster async transfers
-  CUDA_CHECK(cudaMallocHost(&batch->h_vecs, max_vecs * shared_ctx->m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(uint64_t)));
+  // Use pre-allocated slices from shared buffer pools
+  size_t batch_offset = batch_index * shared_ctx->batch_size;
+  batch->h_vecs = &shared_ctx->h_vecs_pool[batch_offset * shared_ctx->m];
+  batch->h_results = &shared_ctx->h_results_pool[batch_offset];
+  batch->d_vecs = &shared_ctx->d_vecs_pool[batch_offset * shared_ctx->m];
+  batch->d_results = &shared_ctx->d_results_pool[batch_offset];
 
   // Create CUDA streams for pipelining
   for (int i = 0; i < NUM_STREAMS; i++) {
     CUDA_CHECK(cudaStreamCreate(&batch->streams[i]));
   }
-
-  // Allocate device memory - only per-batch varying data
-  CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * shared_ctx->m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_results, max_vecs * sizeof(uint64_t)));
 
   return batch;
 }
@@ -1053,14 +1082,8 @@ void vec_batch_free(vec_batch_t *batch) {
     CUDA_CHECK(cudaStreamDestroy(batch->streams[i]));
   }
 
-  // Free pinned host memory
-  CUDA_CHECK(cudaFreeHost(batch->h_vecs));
-  CUDA_CHECK(cudaFreeHost(batch->h_results));
-
-  // Free device memory - only per-batch varying data
-  // Lookup tables are owned by shared context
-  CUDA_CHECK(cudaFree(batch->d_vecs));
-  CUDA_CHECK(cudaFree(batch->d_results));
+  // Note: buffers (h_vecs, h_results, d_vecs, d_results) are NOT freed here
+  // They're slices of shared buffer pools owned by gpu_shared_ctx_t
 
   free(batch);
 }

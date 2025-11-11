@@ -25,6 +25,8 @@ typedef struct gpu_shared_ctx_t gpu_shared_ctx_t;
 
 // Create shared GPU context with constant lookup tables for a specific device
 // This should be allocated once per GPU and shared across all batches on that GPU
+// max_batches: maximum number of batches that will be created (for buffer pool sizing)
+// batch_size: vectors per batch (typically GPU_BATCH_SIZE)
 gpu_shared_ctx_t *gpu_shared_ctx_new(int device_id, uint64_t n, uint64_t n_args, uint64_t m,
                                       uint64_t p, uint64_t p_dash, uint64_t r, uint64_t r3,
                                       const uint64_t *jk_prod_M, const uint64_t *nat_M,
@@ -32,7 +34,8 @@ gpu_shared_ctx_t *gpu_shared_ctx_new(int device_id, uint64_t n, uint64_t n_args,
                                       const uint64_t *jk_sums_M, const uint64_t *jk_sums_pow_lower_M,
                                       const uint64_t *jk_sums_pow_upper_M, const uint64_t *rs,
                                       const uint64_t *fact_M, const uint64_t *fact_inv_M,
-                                      size_t m_half, size_t n_rs, bool is_jack_mode);
+                                      size_t m_half, size_t n_rs, bool is_jack_mode,
+                                      size_t max_batches, size_t batch_size);
 
 // Free shared GPU context
 void gpu_shared_ctx_free(gpu_shared_ctx_t *ctx);
@@ -40,8 +43,9 @@ void gpu_shared_ctx_free(gpu_shared_ctx_t *ctx);
 // === Vector-based API (builds matrices on GPU, much faster) ===
 
 // Create a vector batch for processing coefficient vectors on GPU
-// Uses shared context for constant lookup tables
-vec_batch_t *vec_batch_new(size_t max_vecs, gpu_shared_ctx_t *shared_ctx);
+// Uses shared context for constant lookup tables and pre-allocated buffers
+// batch_index: which slice of the pre-allocated buffer pool to use (0 to max_batches-1)
+vec_batch_t *vec_batch_new(gpu_shared_ctx_t *shared_ctx, size_t batch_index);
 
 // Add a coefficient vector to the batch
 size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
