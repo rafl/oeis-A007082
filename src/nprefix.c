@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     }
 
     if (depth < m) {
-      size_t sub_scratch[m+1], sub_vec[m];
+      size_t sub_scratch[m + 1], sub_vec[m];
       canon_iter_t sub_iter;
 
       canon_iter_from_prefix(&sub_iter, m, n, sub_scratch, vec, depth);

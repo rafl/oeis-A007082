@@ -50,7 +50,8 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
   memcpy(&q->buf[q->tail * stride], vecs, fst * stride * sizeof(size_t));
 
   if (fst < n_vec)
-    memcpy(q->buf, &vecs[fst * stride], (n_vec - fst) * stride * sizeof(size_t));
+    memcpy(q->buf, &vecs[fst * stride],
+           (n_vec - fst) * stride * sizeof(size_t));
 
   q->tail = (q->tail + n_vec) % q->cap;
   q->fill += n_vec;

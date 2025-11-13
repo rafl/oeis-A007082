@@ -676,7 +676,8 @@ static void *residue_for_prime(void *ud) {
         ++necklace_count;
       }
     }
-    atomic_fetch_add_explicit(worker->done, necklace_count, memory_order_relaxed);
+    atomic_fetch_add_explicit(worker->done, necklace_count,
+                              memory_order_relaxed);
     necklace_count = 0;
   }
 
