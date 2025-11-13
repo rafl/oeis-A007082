@@ -728,7 +728,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   _Atomic size_t done = 0;
   uint64_t acc = 0;
 
-  uint64_t iter_st[m + 5];
+  uint64_t iter_st[m + 7]; // 6 base fields + (m+1) scratch = m+7 total
   size_t st_len = 0;
 
   if (st->snapshot)

@@ -39,9 +39,9 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
     return;
   };
 
-  uint64_t iter_st[4 + st->q->m + 1];
+  uint64_t iter_st[6 + st->q->m + 1];
   size_t st_len =
-      queue_save(st->q, iter_st, (4 + st->q->m + 1) * sizeof(uint64_t));
+      queue_save(st->q, iter_st, (6 + st->q->m + 1) * sizeof(uint64_t));
   uint64_t data[3] = {idx, *st->acc, st_len};
   if (write(fd, &data, sizeof(data)) != 3 * sizeof(uint64_t)) {
     printf("\nfailed to snapshot (write) %zu %" PRIu64 "\n", idx, *st->acc);
