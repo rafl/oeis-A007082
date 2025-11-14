@@ -1,0 +1,52 @@
+#pragma once
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// Check if CUDA is available at runtime
+bool gpu_available(void);
+
+// Get number of available GPUs
+int gpu_device_count(void);
+
+// Opaque batch structure
+typedef struct vec_batch_t vec_batch_t;
+
+// === Vector-based API (builds matrices on GPU, much faster) ===
+
+// Create a vector batch for processing coefficient vectors on GPU
+// Now includes all lookup tables for full computation
+vec_batch_t *vec_batch_new(
+    size_t max_vecs, uint64_t n, uint64_t n_args, uint64_t m, uint64_t p,
+    uint64_t p_dash, uint64_t r, uint64_t r3, const uint64_t *jk_prod_M,
+    const uint64_t *nat_M, const uint64_t *nat_inv_M, const uint64_t *ws_M,
+    const uint64_t *jk_sums_pow_lower_M, const uint64_t *jk_sums_pow_upper_M,
+    const uint64_t *rs, const uint64_t *fact_M, const uint64_t *fact_inv_M,
+    size_t m_half, size_t n_rs, bool is_jack_mode);
+
+// Add a coefficient vector to the batch
+size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
+
+// Launch async GPU compute (returns immediately)
+void vec_batch_compute_async(vec_batch_t *batch);
+
+// Wait for async compute to complete
+void vec_batch_wait(vec_batch_t *batch);
+
+// Get result for a vector
+uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx);
+
+// Clear batch for reuse
+void vec_batch_clear(vec_batch_t *batch);
+
+// Free batch
+void vec_batch_free(vec_batch_t *batch);
+
+#ifdef __cplusplus
+}
+#endif
