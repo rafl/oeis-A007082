@@ -7,6 +7,11 @@
 #include "queue.h"
 #include "snapshot.h"
 
+#ifdef USE_GPU
+#include "gpu_det.h"
+#include <cuda_runtime.h>
+#endif
+
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -622,6 +627,7 @@ typedef struct {
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
+  int device_id;  // GPU device ID for this worker
   size_t prefix_depth;
 } worker_t;
 
@@ -684,6 +690,171 @@ static void *residue_for_prime(void *ud) {
   (void)w_idle(worker);
   return NULL;
 }
+
+#ifdef USE_GPU
+// GPU batch size - independent of queue CHUNK size
+// Controls how many full vectors are sent to GPU at once
+#define GPU_BATCH_SIZE (1UL << 12)
+
+// Helper to post-process a batch of results
+static void process_batch_results(worker_t *worker, vec_batch_t *batch,
+                                   size_t n_vec, uint64_t *l_acc) {
+  const prim_ctx_t *ctx = worker->ctx;
+  uint64_t p = ctx->p;
+
+  // GPU has computed complete david() or jack() result for each vector
+  // Just retrieve and accumulate
+  for (size_t c = 0; c < n_vec; ++c) {
+    uint64_t result = vec_batch_get(batch, c);
+    *l_acc = add_mod_u64(*l_acc, result, p);
+  }
+
+  // Update done counter with number of vectors processed
+  atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
+}
+
+static void *residue_for_prime_gpu(void *ud) {
+  worker_t *worker = ud;
+  const prim_ctx_t *ctx = worker->ctx;
+  uint64_t m = ctx->m, l_acc = 0;
+  size_t n_args = ctx->n_args;
+  size_t prefix_depth = worker->prefix_depth;
+  worker->l_acc = &l_acc;
+
+  // Set GPU device for this worker
+  cudaSetDevice(worker->device_id);
+
+  // Determine if we're in jack mode
+  bool is_jack_mode = (worker->f != david);
+
+  // Calculate n_rs (same formula as in prim_ctx_new)
+  size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
+
+  // Create 4 GPU batches for quad buffering with all lookup tables
+  // More buffers = more in-flight work = better GPU utilization
+  #define NUM_BUFFERS 16
+  vec_batch_t *batches[NUM_BUFFERS];
+  size_t *full_vecs_buffers[NUM_BUFFERS];
+  size_t n_vecs[NUM_BUFFERS];
+
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    batches[i] = vec_batch_new(GPU_BATCH_SIZE, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
+                                ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M,
+                                ctx->ws_M, ctx->jk_sums_M, ctx->jk_sums_pow_lower_M,
+                                ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M, ctx->fact_inv_M,
+                                ctx->m_half, n_rs, is_jack_mode);
+    full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
+    n_vecs[i] = 0;
+  }
+
+  // Allocate buffers for prefix expansion
+  size_t *prefix_buf = worker->vecs;
+  size_t sub_scratch[m + 1];
+  size_t full_vec[m];
+
+  int current = 0;
+  int in_flight = 0;  // How many batches are currently in flight on GPU
+  bool queue_done = false;
+  size_t n_prefixes = 0, prefix_idx = 0;
+  bool iter_active = false;  // Track if we have a partial iterator
+  canon_iter_t sub_iter;     // Persistent iterator across batches
+
+  // Helper macro to fill a GPU batch from prefixes
+  #define FILL_BATCH(buf_idx, result_var) do { \
+    vec_batch_clear(batches[buf_idx]); \
+    n_vecs[buf_idx] = 0; \
+    \
+    while (n_vecs[buf_idx] < GPU_BATCH_SIZE && !queue_done) { \
+      if (!iter_active) { \
+        if (prefix_idx >= n_prefixes) { \
+          n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker); \
+          prefix_idx = 0; \
+          if (n_prefixes == 0) { \
+            queue_done = true; \
+            break; \
+          } \
+        } \
+        \
+        size_t *prefix = &prefix_buf[prefix_idx * prefix_depth]; \
+        canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix, prefix_depth); \
+        iter_active = true; \
+      } \
+      \
+      if (canon_iter_next(&sub_iter, full_vec)) { \
+        memcpy(&full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m], full_vec, m * sizeof(size_t)); \
+        vec_batch_add(batches[buf_idx], &full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m]); \
+        n_vecs[buf_idx]++; \
+      } else { \
+        iter_active = false; \
+        prefix_idx++; \
+      } \
+    } \
+    \
+    result_var = (n_vecs[buf_idx] > 0); \
+  } while(0)
+
+  for (;;) {
+    // Fill up the pipeline initially
+    while (in_flight < NUM_BUFFERS) {
+      bool has_work;
+      FILL_BATCH(current, has_work);
+      if (!has_work) {
+        // No more work
+        break;
+      }
+
+      // Launch async GPU compute on current batch (returns immediately)
+      vec_batch_compute_async(batches[current]);
+      in_flight++;
+      current = (current + 1) % NUM_BUFFERS;
+    }
+
+    if (in_flight == 0) {
+      // Never got any work
+      break;
+    }
+
+    // Now process the oldest batch (which should be done or nearly done)
+    int oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
+
+    // Wait for oldest batch to complete
+    vec_batch_wait(batches[oldest]);
+
+    // Process its results
+    process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
+    in_flight--;
+
+    // Try to fill and launch a new batch
+    bool has_work;
+    FILL_BATCH(current, has_work);
+    if (!has_work) {
+      // No more work, drain remaining in-flight batches
+      while (in_flight > 0) {
+        oldest = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS;
+        vec_batch_wait(batches[oldest]);
+        process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
+        in_flight--;
+      }
+      break;
+    }
+
+    // Launch async GPU compute on current batch
+    vec_batch_compute_async(batches[current]);
+    in_flight++;
+    current = (current + 1) % NUM_BUFFERS;
+  }
+
+  for (int i = 0; i < NUM_BUFFERS; i++) {
+    vec_batch_free(batches[i]);
+    free(full_vecs_buffers[i]);
+  }
+  #undef FILL_BATCH
+  #undef NUM_BUFFERS
+
+  (void)w_idle(worker);
+  return NULL;
+}
+#endif
 
 static size_t get_num_threads() {
   char *env = getenv("OMP_NUM_THREADS");
@@ -751,13 +922,27 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     progress_start(&prog, p, &done, siz, &q->fill);
 
   // make some threads
-  pthread_t worker[st->n_thrds];
-  worker_t w_ctxs[st->n_thrds];
-  bool *idles[st->n_thrds];
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
   uint64_t (*fn)(uint64_t *, const prim_ctx_t *) =
       st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
-  for (size_t i = 0; i < st->n_thrds; ++i) {
+
+#ifdef USE_GPU
+  bool use_gpu = gpu_det_available();
+  int n_gpus = use_gpu ? gpu_det_device_count() : 0;
+  // With GPU: use fewer workers (2-3 per GPU) to reduce queue contention
+  // Remaining threads will be producers
+  size_t n_workers = use_gpu ? ((size_t)n_gpus * 3) : st->n_thrds;
+  void *(*worker_fn)(void *) = use_gpu ? residue_for_prime_gpu : residue_for_prime;
+#else
+  size_t n_workers = st->n_thrds;
+  void *(*worker_fn)(void *) = residue_for_prime;
+#endif
+
+  pthread_t worker[n_workers];
+  worker_t w_ctxs[n_workers];
+  bool *idles[n_workers];
+
+  for (size_t i = 0; i < n_workers; ++i) {
     w_ctxs[i] = (worker_t){.ctx = ctx,
                            .f = fn,
                            .done = &done,
@@ -766,19 +951,25 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
                            .idle = false,
                            .acc = &acc,
                            .acc_mu = &acc_mu,
-                           .prefix_depth = prefix_depth};
+                           .prefix_depth = prefix_depth,
+#ifdef USE_GPU
+                           .device_id = use_gpu ? (int)(i % n_gpus) : 0
+#else
+                           .device_id = 0
+#endif
+                           };
     idles[i] = &w_ctxs[i].idle;
     // worker threads
-    pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
+    pthread_create(&worker[i], NULL, worker_fn, &w_ctxs[i]);
   }
 
   snapshot_t ss;
   if (st->snapshot)
-    snapshot_start(&ss, st->mode, n, p, st->n_thrds, q, idles, &done, &acc);
+    snapshot_start(&ss, st->mode, n, p, n_workers, q, idles, &done, &acc);
 
   queue_fill(q);
 
-  for (size_t i = 0; i < st->n_thrds; ++i)
+  for (size_t i = 0; i < n_workers; ++i)
     pthread_join(worker[i], NULL);
 
   queue_free(q);
