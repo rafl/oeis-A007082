@@ -767,6 +767,17 @@ static void *residue_for_prime_gpu(void *ud) {
     while (n_vecs[buf_idx] < GPU_BATCH_SIZE && !queue_done) { \
       if (!iter_active) { \
         if (prefix_idx >= n_prefixes) { \
+          /* Before calling queue_pop, check if snapshot is happening */ \
+          /* If so, drain all in-flight GPU batches to ensure accurate snapshot */ \
+          if (worker->q->pause && in_flight > 0) { \
+            while (in_flight > 0) { \
+              int drain_idx = (current - in_flight + NUM_BUFFERS) % NUM_BUFFERS; \
+              vec_batch_wait(batches[drain_idx]); \
+              process_batch_results(worker, batches[drain_idx], n_vecs[drain_idx], &l_acc); \
+              in_flight--; \
+            } \
+          } \
+          \
           n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker); \
           prefix_idx = 0; \
           if (n_prefixes == 0) { \
