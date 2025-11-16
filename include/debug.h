@@ -1,7 +1,5 @@
 #pragma once
 
-#include <assert.h>
-
 #ifndef DEBUG
 #define DEBUG 1
 #endif
@@ -18,3 +16,5 @@
 #define VERIFY(e) ((void)(e))
 #define DEBUG_ARG __attribute__((unused))
 #endif
+
+#include <assert.h>
