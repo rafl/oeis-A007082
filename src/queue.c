@@ -34,7 +34,10 @@ size_t queue_save(queue_t *q, void *buf, size_t len) {
   return canon_iter_save(&q->it, buf, len);
 }
 
-void queue_free(queue_t *q) { free(q->scratch); }
+void queue_free(queue_t *q) {
+  free(q->scratch);
+  free(q);
+}
 
 static inline void queue_push(queue_t *restrict q, const size_t *vecs,
                               size_t n_vec) {
