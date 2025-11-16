@@ -20,9 +20,6 @@
 #define POW_CACHE_SPLIT 6
 #define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
 
-// Number of CUDA streams for pipelining
-#define NUM_STREAMS 4
-
 typedef unsigned __int128 uint128_t;
 
 // Helper function for jk_pos on device
@@ -476,7 +473,7 @@ struct vec_batch_t {
   uint64_t *d_results;
 
   // CUDA streams for pipelining
-  cudaStream_t streams[NUM_STREAMS];
+  cudaStream_t stream;
 
   // Batch parameters
   size_t max_vecs;
@@ -517,10 +514,7 @@ vec_batch_t *vec_batch_new(
   CUDA_CHECK(cudaMallocHost(&batch->h_vecs, max_vecs * m * sizeof(uint64_t)));
   CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(uint64_t)));
 
-  // Create CUDA streams for pipelining
-  for (int i = 0; i < NUM_STREAMS; i++) {
-    CUDA_CHECK(cudaStreamCreate(&batch->streams[i]));
-  }
+  CUDA_CHECK(cudaStreamCreate(&batch->stream));
 
   // Allocate device memory - matrix computation
   CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * m * sizeof(uint64_t)));
@@ -580,84 +574,66 @@ size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec) {
   return idx;
 }
 
-#define LAUNCH_KERNEL(M, stream, offset, count)                                \
+#define LAUNCH_KERNEL(M, stream, count)                                        \
   vec_full_kernel<M, (M + 1) / 2><<<num_blocks, block_size, 0, stream>>>(      \
-      batch->d_vecs + (offset) * batch->m, (count), batch->n, batch->n_args,   \
-      batch->is_jack_mode, batch->d_jk_prod_M, batch->d_nat_M,                 \
-      batch->d_nat_inv_M, batch->d_ws_M, batch->d_jk_sums_pow_lower_M,         \
-      batch->d_jk_sums_pow_upper_M, batch->d_rs, batch->d_fact_M,              \
-      batch->d_fact_inv_M, batch->d_results + (offset), batch->p,              \
+      batch->d_vecs, (count), batch->n, batch->n_args, batch->is_jack_mode,    \
+      batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M, batch->d_ws_M,   \
+      batch->d_jk_sums_pow_lower_M, batch->d_jk_sums_pow_upper_M, batch->d_rs, \
+      batch->d_fact_M, batch->d_fact_inv_M, batch->d_results, batch->p,        \
       batch->p_dash, batch->r, batch->r3)
 
 // Launch async GPU compute (non-blocking)
-void vec_batch_compute_async(vec_batch_t *batch) {
+void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
   if (batch->count == 0)
     return;
 
-  // Split batch into sub-batches for streaming
-  // Each stream handles one sub-batch, allowing H2D, kernel, and D2H to overlap
-  size_t vecs_per_stream = (batch->count + NUM_STREAMS - 1) / NUM_STREAMS;
   int block_size = 256;
 
-  for (int i = 0; i < NUM_STREAMS; i++) {
-    size_t offset = i * vecs_per_stream;
-    if (offset >= batch->count)
-      break;
+  cudaStream_t stream = batch->stream;
 
-    size_t count = (offset + vecs_per_stream > batch->count)
-                       ? (batch->count - offset)
-                       : vecs_per_stream;
+  // Async copy H2D for this sub-batch
+  CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs, batch->h_vecs,
+                             batch->count * batch->m * sizeof(uint64_t),
+                             cudaMemcpyHostToDevice, stream));
 
-    cudaStream_t stream = batch->streams[i];
-
-    // Async copy H2D for this sub-batch
-    size_t vecs_size = count * batch->m * sizeof(uint64_t);
-    CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs + offset * batch->m,
-                               batch->h_vecs + offset * batch->m, vecs_size,
-                               cudaMemcpyHostToDevice, stream));
-
-    // Launch kernel on this stream for this sub-batch
-    int num_blocks = (count + block_size - 1) / block_size;
+  int num_blocks = (batch->count + block_size - 1) / block_size;
 
 #define LK(n)                                                                  \
   case n:                                                                      \
-    LAUNCH_KERNEL(n, stream, offset, count);                                   \
+    LAUNCH_KERNEL(n, stream, batch->count);                                    \
     break;
 
-    switch (batch->m) {
-      LK(3);
-      LK(5);
-      LK(7);
-      LK(9);
-      LK(11);
-      LK(13);
-      LK(15);
-      LK(17);
-      LK(19);
-      LK(21);
-      LK(23);
-      LK(25);
-    default:
-      printf("\nm=%lu\n", batch->m);
-      assert("unsupported m" && 0);
-    }
+  switch (batch->m) {
+    LK(3);
+    LK(5);
+    LK(7);
+    LK(9);
+    LK(11);
+    LK(13);
+    LK(15);
+    LK(17);
+    LK(19);
+    LK(21);
+    LK(23);
+    LK(25);
+  default:
+    printf("\nm=%lu\n", batch->m);
+    assert("unsupported m" && 0);
+  }
 #undef LK
 
-    CUDA_CHECK(cudaGetLastError());
+  CUDA_CHECK(cudaGetLastError());
 
-    // Async copy D2H for results of this sub-batch
-    CUDA_CHECK(cudaMemcpyAsync(
-        batch->h_results + offset, batch->d_results + offset,
-        count * sizeof(uint64_t), cudaMemcpyDeviceToHost, stream));
-  }
-  // Returns immediately - GPU work continues asynchronously
+  CUDA_CHECK(cudaMemcpyAsync(batch->h_results, batch->d_results,
+                             batch->count * sizeof(uint64_t),
+                             cudaMemcpyDeviceToHost, stream));
+
+  CUDA_CHECK(cudaLaunchHostFunc(batch->stream, done, ud));
 }
 
 // Wait for async compute to complete
 void vec_batch_wait(vec_batch_t *batch) {
-  for (int i = 0; i < NUM_STREAMS; i++) {
-    CUDA_CHECK(cudaStreamSynchronize(batch->streams[i]));
-  }
+  CUDA_CHECK(cudaStreamSynchronize(batch->stream));
 }
 
 uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
@@ -671,10 +647,7 @@ void vec_batch_free(vec_batch_t *batch) {
   if (!batch)
     return;
 
-  // Destroy CUDA streams
-  for (int i = 0; i < NUM_STREAMS; i++) {
-    CUDA_CHECK(cudaStreamDestroy(batch->streams[i]));
-  }
+  CUDA_CHECK(cudaStreamDestroy(batch->stream));
 
   // Free pinned host memory
   CUDA_CHECK(cudaFreeHost(batch->h_vecs));

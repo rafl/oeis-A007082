@@ -751,7 +751,11 @@ static void *residue_for_prime(void *ud) {
 #ifdef USE_GPU
 // GPU batch size - independent of queue CHUNK size
 // Controls how many full vectors are sent to GPU at once
-#define GPU_BATCH_SIZE (1UL << 12)
+#define GPU_BATCH_SIZE (1UL << 16)
+
+static void gpu_batch_done(void *data) {
+  asm("nop");
+}
 
 static void *residue_for_prime_gpu(void *ud) {
   worker_t *worker = ud;
@@ -851,7 +855,7 @@ static void *residue_for_prime_gpu(void *ud) {
       }
 
       // Launch async GPU compute on current batch (returns immediately)
-      vec_batch_compute_async(batches[current]);
+      vec_batch_compute_async(batches[current], gpu_batch_done, NULL);
       in_flight++;
       current = (current + 1) % NUM_GPU_BUFFERS;
     }
@@ -886,7 +890,7 @@ static void *residue_for_prime_gpu(void *ud) {
     }
 
     // Launch async GPU compute on current batch
-    vec_batch_compute_async(batches[current]);
+    vec_batch_compute_async(batches[current], gpu_batch_done, NULL);
     in_flight++;
     current = (current + 1) % NUM_GPU_BUFFERS;
   }

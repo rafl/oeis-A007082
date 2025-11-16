@@ -17,6 +17,8 @@ int gpu_device_count(void);
 // Opaque batch structure
 typedef struct vec_batch_t vec_batch_t;
 
+typedef void (*batch_cb_t)(void *);
+
 // === Vector-based API (builds matrices on GPU, much faster) ===
 
 // Create a vector batch for processing coefficient vectors on GPU
@@ -33,7 +35,7 @@ vec_batch_t *vec_batch_new(
 size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
 
 // Launch async GPU compute (returns immediately)
-void vec_batch_compute_async(vec_batch_t *batch);
+void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud);
 
 // Wait for async compute to complete
 void vec_batch_wait(vec_batch_t *batch);
