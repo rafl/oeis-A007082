@@ -617,12 +617,6 @@ typedef struct {
 
 #ifdef USE_GPU
 #define NUM_GPU_BUFFERS 16
-typedef struct gpu_worker_state {
-  int *current;          // index of next buffer to fill (mod num_buffers)
-  int *in_flight;        // number of batches currently in flight
-  vec_batch_t **batches; // [num_buffers]
-  size_t *n_vecs;        // [num_buffers]
-} gpu_worker_state_t;
 #endif
 
 typedef struct {
@@ -634,10 +628,13 @@ typedef struct {
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
-  int device_id; // GPU device ID for this worker
   size_t prefix_depth;
 #ifdef USE_GPU
-  gpu_worker_state_t *gpu; // NULL for CPU workers
+  int device_id; // GPU device ID for this worker
+  bool is_gpu_worker;
+  pthread_mutex_t gpu_mu;
+  pthread_cond_t gpu_cv;
+  int gpu_inflight;
 #endif
 } worker_t;
 
@@ -647,53 +644,61 @@ static void w_resume(void *ud) {
 }
 
 #ifdef USE_GPU
-// Helper to post-process a batch of results
-static void process_batch_results(worker_t *worker, vec_batch_t *batch,
-                                  size_t n_vec, uint64_t *l_acc) {
-  const prim_ctx_t *ctx = worker->ctx;
-  uint64_t p = ctx->p;
+// Context passed to the host callback when a GPU batch completes
+typedef struct {
+  worker_t *worker;
+  vec_batch_t *batch;
+  size_t n_vec;
+  int buf_idx;
+  bool *batch_busy; // points into residue_for_prime_gpu's local array
+} gpu_batch_ctx_t;
 
-  // GPU has computed complete david() or jack() result for each vector
-  // Just retrieve and accumulate
+// Host callback: runs after vec_batch_compute_async finishes a batch
+static void CUDART_CB gpu_batch_done(void *data) {
+  gpu_batch_ctx_t *ctx = (gpu_batch_ctx_t *)data;
+  worker_t *w = ctx->worker;
+  vec_batch_t *batch = ctx->batch;
+  size_t n_vec = ctx->n_vec;
+
+  const prim_ctx_t *pctx = w->ctx;
+  uint64_t p = pctx->p;
+
+  // Accumulate this batch's results locally
+  uint64_t local_acc = 0;
   for (size_t c = 0; c < n_vec; ++c) {
     uint64_t result = vec_batch_get(batch, c);
-    *l_acc = add_mod_u64(*l_acc, result, p);
+    local_acc = add_mod_u64(local_acc, result, p);
   }
 
-  // Update done counter with number of vectors processed
-  atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
-}
+  // Merge into shared accumulator
+  pthread_mutex_lock(w->acc_mu);
+  *w->acc = add_mod_u64(*w->acc, local_acc, p);
+  pthread_mutex_unlock(w->acc_mu);
 
-static void gpu_drain(worker_t *w) {
-  if (!w->gpu)
-    return;
+  // Bump done counter
+  atomic_fetch_add_explicit(w->done, n_vec, memory_order_relaxed);
 
-  gpu_worker_state_t *s = w->gpu;
-  if (!s->in_flight || !s->batches || !s->n_vecs)
-    return;
+  // Mark this batch slot free and signal anyone waiting
+  pthread_mutex_lock(&w->gpu_mu);
+  ctx->batch_busy[ctx->buf_idx] = false;
+  w->gpu_inflight--;
+  pthread_cond_broadcast(&w->gpu_cv);
+  pthread_mutex_unlock(&w->gpu_mu);
 
-  int in_flight = *s->in_flight;
-  if (in_flight <= 0)
-    return; // nothing to drain
-
-  int current = *s->current;
-  // Drain all in-flight batches in the same order the main loop uses.
-  while (in_flight > 0) {
-    int oldest = (current - in_flight + NUM_GPU_BUFFERS) % NUM_GPU_BUFFERS;
-
-    vec_batch_wait(s->batches[oldest]);
-    process_batch_results(w, s->batches[oldest], s->n_vecs[oldest], w->l_acc);
-    --in_flight;
-  }
-
-  *s->in_flight = 0;
+  free(ctx);
 }
 #endif
 
 static resume_cb_t w_idle(void *ud) {
   worker_t *w = ud;
 #ifdef USE_GPU
-  gpu_drain(w);
+  if (w->is_gpu_worker) {
+    // Ensure all in-flight GPU work for this worker has completed
+    pthread_mutex_lock(&w->gpu_mu);
+    while (w->gpu_inflight > 0)
+      pthread_cond_wait(&w->gpu_cv, &w->gpu_mu);
+    pthread_mutex_unlock(&w->gpu_mu);
+  }
 #endif
   pthread_mutex_lock(w->acc_mu);
   *w->acc = add_mod_u64(*w->acc, *w->l_acc, w->ctx->p);
@@ -751,18 +756,74 @@ static void *residue_for_prime(void *ud) {
 #ifdef USE_GPU
 // GPU batch size - independent of queue CHUNK size
 // Controls how many full vectors are sent to GPU at once
-#define GPU_BATCH_SIZE (1UL << 16)
+#define GPU_BATCH_SIZE (1UL << 15)
 
-static void gpu_batch_done(void *data) {
-  asm("nop");
+// Helper: fill a single GPU batch from the prefix queue.
+// Returns true if any vectors were added, false if no more work.
+static bool gpu_fill_batch(worker_t *worker, int buf_idx, vec_batch_t *batch,
+                           size_t *full_vec_buf, size_t *n_vec_out,
+                           bool *queue_done, size_t *n_prefixes,
+                           size_t *prefix_idx, bool *iter_active,
+                           canon_iter_t *sub_iter, size_t *sub_scratch) {
+  const prim_ctx_t *ctx = worker->ctx;
+  size_t m = ctx->m;
+  size_t n_args = ctx->n_args;
+  size_t prefix_depth = worker->prefix_depth;
+  size_t *prefix_buf = worker->vecs;
+
+  vec_batch_clear(batch);
+  size_t n_vec = 0;
+
+  while (n_vec < GPU_BATCH_SIZE && !*queue_done) {
+    if (!*iter_active) {
+      if (*prefix_idx >= *n_prefixes) {
+        *n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);
+        *prefix_idx = 0;
+        if (*n_prefixes == 0) {
+          *queue_done = true;
+          break;
+        }
+      }
+
+      size_t *prefix = &prefix_buf[*prefix_idx * prefix_depth];
+      canon_iter_from_prefix(sub_iter, m, n_args, sub_scratch, prefix,
+                             prefix_depth);
+      *iter_active = true;
+    }
+
+    uint64_t *tgt = &full_vec_buf[n_vec * m];
+    if (canon_iter_next(sub_iter, tgt)) {
+      vec_batch_add(batch, tgt);
+      ++n_vec;
+    } else {
+      *iter_active = false;
+      ++*prefix_idx;
+    }
+  }
+
+  *n_vec_out = n_vec;
+  return n_vec > 0;
+}
+
+// Helper: wait until a free batch slot is available and return its index.
+static int gpu_wait_for_free_batch(worker_t *worker, bool *batch_busy) {
+  pthread_mutex_lock(&worker->gpu_mu);
+  for (;;) {
+    for (int i = 0; i < NUM_GPU_BUFFERS; ++i) {
+      if (!batch_busy[i]) {
+        pthread_mutex_unlock(&worker->gpu_mu);
+        return i;
+      }
+    }
+    // No free slot, wait until a callback frees one
+    pthread_cond_wait(&worker->gpu_cv, &worker->gpu_mu);
+  }
 }
 
 static void *residue_for_prime_gpu(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t m = ctx->m, l_acc = 0;
-  size_t n_args = ctx->n_args;
-  size_t prefix_depth = worker->prefix_depth;
   worker->l_acc = &l_acc;
 
   // Set GPU device for this worker
@@ -778,7 +839,7 @@ static void *residue_for_prime_gpu(void *ud) {
   // More buffers = more in-flight work = better GPU utilization
   vec_batch_t *batches[NUM_GPU_BUFFERS];
   size_t *full_vecs_buffers[NUM_GPU_BUFFERS];
-  size_t n_vecs[NUM_GPU_BUFFERS];
+  bool batch_busy[NUM_GPU_BUFFERS];
 
   for (int i = 0; i < NUM_GPU_BUFFERS; i++) {
     batches[i] = vec_batch_new(
@@ -787,121 +848,55 @@ static void *residue_for_prime_gpu(void *ud) {
         ctx->jk_sums_pow_lower_M, ctx->jk_sums_pow_upper_M, ctx->rs,
         ctx->fact_M, ctx->fact_inv_M, ctx->m_half, n_rs, is_jack_mode);
     full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
-    n_vecs[i] = 0;
+    batch_busy[i] = false;
   }
 
-  // Allocate buffers for prefix expansion
-  size_t *prefix_buf = worker->vecs;
   size_t sub_scratch[m + 1];
 
-  int current = 0;
-  int in_flight = 0; // How many batches are currently in flight on GPU
   bool queue_done = false;
   size_t n_prefixes = 0, prefix_idx = 0;
   bool iter_active = false; // Track if we have a partial iterator
   canon_iter_t sub_iter;    // Persistent iterator across batches
-  gpu_worker_state_t gpu_state = {
-      .current = &current,
-      .in_flight = &in_flight,
-      .batches = batches,
-      .n_vecs = n_vecs,
-  };
-  worker->gpu = &gpu_state;
-
-// Helper macro to fill a GPU batch from prefixes
-#define FILL_BATCH(buf_idx, result_var)                                        \
-  do {                                                                         \
-    vec_batch_clear(batches[buf_idx]);                                         \
-    n_vecs[buf_idx] = 0;                                                       \
-                                                                               \
-    while (n_vecs[buf_idx] < GPU_BATCH_SIZE && !queue_done) {                  \
-      if (!iter_active) {                                                      \
-        if (prefix_idx >= n_prefixes) {                                        \
-          n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);       \
-          prefix_idx = 0;                                                      \
-          if (n_prefixes == 0) {                                               \
-            queue_done = true;                                                 \
-            break;                                                             \
-          }                                                                    \
-        }                                                                      \
-                                                                               \
-        size_t *prefix = &prefix_buf[prefix_idx * prefix_depth];               \
-        canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,      \
-                               prefix_depth);                                  \
-        iter_active = true;                                                    \
-      }                                                                        \
-                                                                               \
-      uint64_t *tgt = &full_vecs_buffers[buf_idx][n_vecs[buf_idx] * m];        \
-      if (canon_iter_next(&sub_iter, tgt)) {                                   \
-        vec_batch_add(batches[buf_idx], tgt);                                  \
-        n_vecs[buf_idx]++;                                                     \
-      } else {                                                                 \
-        iter_active = false;                                                   \
-        prefix_idx++;                                                          \
-      }                                                                        \
-    }                                                                          \
-                                                                               \
-    result_var = (n_vecs[buf_idx] > 0);                                        \
-  } while (0)
 
   for (;;) {
-    // Fill up the pipeline initially
-    while (in_flight < NUM_GPU_BUFFERS) {
-      bool has_work;
-      FILL_BATCH(current, has_work);
-      if (!has_work) {
-        // No more work
-        break;
-      }
+    // Find a free batch slot (or wait until one is freed by a callback)
+    int buf_idx = gpu_wait_for_free_batch(worker, batch_busy);
 
-      // Launch async GPU compute on current batch (returns immediately)
-      vec_batch_compute_async(batches[current], gpu_batch_done, NULL);
-      in_flight++;
-      current = (current + 1) % NUM_GPU_BUFFERS;
-    }
+    // Fill this batch with as many vectors as we can
+    size_t n_vec = 0;
+    bool has_work = gpu_fill_batch(worker, buf_idx, batches[buf_idx],
+                                   full_vecs_buffers[buf_idx], &n_vec,
+                                   &queue_done, &n_prefixes, &prefix_idx,
+                                   &iter_active, &sub_iter, sub_scratch);
 
-    if (in_flight == 0) {
-      // Never got any work
-      break;
-    }
-
-    // Now process the oldest batch (which should be done or nearly done)
-    int oldest = (current - in_flight + NUM_GPU_BUFFERS) % NUM_GPU_BUFFERS;
-
-    // Wait for oldest batch to complete
-    vec_batch_wait(batches[oldest]);
-
-    // Process its results
-    process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
-    in_flight--;
-
-    // Try to fill and launch a new batch
-    bool has_work;
-    FILL_BATCH(current, has_work);
     if (!has_work) {
-      // No more work, drain remaining in-flight batches
-      while (in_flight > 0) {
-        oldest = (current - in_flight + NUM_GPU_BUFFERS) % NUM_GPU_BUFFERS;
-        vec_batch_wait(batches[oldest]);
-        process_batch_results(worker, batches[oldest], n_vecs[oldest], &l_acc);
-        in_flight--;
-      }
+      // No more CPU work to feed the GPU; stop launching new batches
       break;
     }
 
-    // Launch async GPU compute on current batch
-    vec_batch_compute_async(batches[current], gpu_batch_done, NULL);
-    in_flight++;
-    current = (current + 1) % NUM_GPU_BUFFERS;
+    // Launch async GPU compute on this batch; callback will accumulate results
+    gpu_batch_ctx_t *cb = (gpu_batch_ctx_t *)malloc(sizeof *cb);
+    cb->worker = worker;
+    cb->batch = batches[buf_idx];
+    cb->n_vec = n_vec;
+    cb->buf_idx = buf_idx;
+    cb->batch_busy = batch_busy;
+
+    pthread_mutex_lock(&worker->gpu_mu);
+    batch_busy[buf_idx] = true;
+    worker->gpu_inflight++;
+    pthread_mutex_unlock(&worker->gpu_mu);
+
+    vec_batch_compute_async(batches[buf_idx], gpu_batch_done, cb);
   }
+
+  (void)w_idle(worker);
 
   for (int i = 0; i < NUM_GPU_BUFFERS; i++) {
     vec_batch_free(batches[i]);
     free(full_vecs_buffers[i]);
   }
-#undef FILL_BATCH
 
-  (void)w_idle(worker);
   return NULL;
 }
 #endif
@@ -994,20 +989,22 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   bool *idles[n_workers];
 
   for (size_t i = 0; i < n_workers; ++i) {
-    w_ctxs[i] = (worker_t){.ctx = ctx,
-                           .f = fn,
-                           .done = &done,
-                           .q = q,
-                           .vecs = &st->vecss[i * CHUNK * m],
-                           .idle = false,
-                           .acc = &acc,
-                           .acc_mu = &acc_mu,
-                           .prefix_depth = prefix_depth,
+    w_ctxs[i] = (worker_t){
+        .ctx = ctx,
+        .f = fn,
+        .done = &done,
+        .q = q,
+        .vecs = &st->vecss[i * CHUNK * m],
+        .idle = false,
+        .acc = &acc,
+        .acc_mu = &acc_mu,
+        .prefix_depth = prefix_depth,
 #ifdef USE_GPU
-                           .gpu = NULL,
-                           .device_id = use_gpu ? (int)(i % n_gpus) : 0
-#else
-                           .device_id = 0
+        .device_id = use_gpu ? (int)(i % n_gpus) : 0,
+        .is_gpu_worker = use_gpu,
+        .gpu_inflight = 0,
+        .gpu_mu = PTHREAD_MUTEX_INITIALIZER,
+        .gpu_cv = PTHREAD_COND_INITIALIZER,
 #endif
     };
     idles[i] = &w_ctxs[i].idle;
