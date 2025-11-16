@@ -37,9 +37,6 @@ size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
 // Launch async GPU compute (returns immediately)
 void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud);
 
-// Wait for async compute to complete
-void vec_batch_wait(vec_batch_t *batch);
-
 // Get result for a vector
 uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx);
 

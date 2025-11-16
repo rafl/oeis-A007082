@@ -631,11 +631,6 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
   CUDA_CHECK(cudaLaunchHostFunc(batch->stream, done, ud));
 }
 
-// Wait for async compute to complete
-void vec_batch_wait(vec_batch_t *batch) {
-  CUDA_CHECK(cudaStreamSynchronize(batch->stream));
-}
-
 uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
   assert(idx < batch->count);
   return batch->h_results[idx];
