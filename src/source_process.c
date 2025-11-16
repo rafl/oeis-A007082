@@ -33,7 +33,6 @@ typedef struct {
       *jk_prod_M,           // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
       *nat_M,               // natural numbers up to n (inclusive)
       *nat_inv_M,           // inverses of natural numbers up to n (inclusive)
-      *jk_sums_M,           // w^-j*w^k + w^j*w^-k
       *jk_sums_pow_upper_M, // see jk_sums_pow
       *jk_sums_pow_lower_M,
       *ws_M,       // powers of omega (m form)
@@ -94,11 +93,10 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
   }
 
   // cache of // w^-j*w^k + w^j*w^-k
-  ctx->jk_sums_M = malloc(m * sizeof(uint64_t));
-  assert(ctx->jk_sums_M);
+  uint64_t jk_sums_M[m];
   for (size_t k = 0; k < m; ++k) {
-    ctx->jk_sums_M[jk_pos(0, k, m)] = add_mod_u64(
-        jk_pairs_M[jk_pos(0, k, m)], jk_pairs_M[jk_pos(k, 0, m)], p);
+    jk_sums_M[jk_pos(0, k, m)] = add_mod_u64(jk_pairs_M[jk_pos(0, k, m)],
+                                             jk_pairs_M[jk_pos(k, 0, m)], p);
   }
 
   // see jk_sums_pow
@@ -113,10 +111,10 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
     ctx->jk_sums_pow_lower_M[j] = ctx->r;
     // we do put w^0 + w^-0 = 2 into this cache currently, but we don't actually
     // use it as we use fast_pow_2 instead.
-    ctx->jk_sums_pow_lower_M[ctx->m_half + j] = ctx->jk_sums_M[j];
+    ctx->jk_sums_pow_lower_M[ctx->m_half + j] = jk_sums_M[j];
     ctx->jk_sums_pow_upper_M[j] = ctx->r;
-    ctx->jk_sums_pow_upper_M[ctx->m_half + j] = mont_pow(
-        ctx->jk_sums_M[j], POW_CACHE_DIVISOR, ctx->r, ctx->p, ctx->p_dash);
+    ctx->jk_sums_pow_upper_M[ctx->m_half + j] =
+        mont_pow(jk_sums_M[j], POW_CACHE_DIVISOR, ctx->r, ctx->p, ctx->p_dash);
   }
 
   for (size_t i = 2; i < POW_CACHE_DIVISOR; i++) {
@@ -136,7 +134,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
 
   for (size_t k = 0; k < m; ++k) {
     size_t pos = jk_pos(0, k, m);
-    uint64_t sum_inv = mont_inv(ctx->jk_sums_M[pos], ctx->r3, p, ctx->p_dash);
+    uint64_t sum_inv = mont_inv(jk_sums_M[pos], ctx->r3, p, ctx->p_dash);
     ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
   }
 
@@ -177,7 +175,6 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx->fact_inv_M);
   free(ctx->fact_M);
   free(ctx->ws_M);
-  free(ctx->jk_sums_M);
   free(ctx->nat_inv_M);
   free(ctx->nat_M);
   free(ctx->jk_prod_M);
