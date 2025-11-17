@@ -1,5 +1,6 @@
 #include "progress.h"
 #include "queue.h"
+#include "vec_queue.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -43,13 +44,19 @@ static void *progress(void *_ud) {
     int eh = elapsed / 3600, es = (int)elapsed % 60,
         em = ((int)elapsed / 60) % 60;
     int th = (eta / 3600), ts = (int)eta % 60, tm = ((int)eta / 60) % 60;
+
+    float prefix_q_pct =
+        ((float)atomic_load_explicit(ud->prefix_q_fill, memory_order_relaxed)) *
+        100 / (CHUNK * Q_CAP);
+    float vec_q_pct =
+        ((float)atomic_load_explicit(ud->vec_q_fill, memory_order_relaxed)) *
+        100 / VEC_Q_CAP;
+
     fprintf(stderr,
-            "\r%5.2f%% | %02d:%02d:%02d | %.2fM/s | %3.0f%% | ETA "
+            "\r%5.2f%% | %02d:%02d:%02d | %.2fM/s | p:%3.0f%% v:%3.0f%% | ETA "
             "%02d:%02d:%02d (%" PRIu64 ")",
-            pct, eh, em, es, rate_avg / 1e6,
-            ((float)atomic_load_explicit(ud->q_fill, memory_order_relaxed)) *
-                100 / (CHUNK * Q_CAP),
-            th, tm, ts, ud->p);
+            pct, eh, em, es, rate_avg / 1e6, prefix_q_pct, vec_q_pct, th, tm,
+            ts, ud->p);
     if (d >= tot)
       break;
     now.tv_sec += PROG_INT;
@@ -61,10 +68,15 @@ static void *progress(void *_ud) {
 }
 
 void progress_start(progress_t *p, uint64_t prime, _Atomic size_t *done,
-                    size_t tot, _Atomic size_t *q_fill) {
+                    size_t tot, _Atomic size_t *prefix_q_fill,
+                    _Atomic size_t *vec_q_fill) {
   progress_st_t *st = &p->st;
-  *st = (progress_st_t){
-      .p = prime, .done = done, .tot = tot, .quit = false, .q_fill = q_fill};
+  *st = (progress_st_t){.p = prime,
+                        .done = done,
+                        .tot = tot,
+                        .quit = false,
+                        .prefix_q_fill = prefix_q_fill,
+                        .vec_q_fill = vec_q_fill};
   pthread_mutex_init(&st->mu, NULL);
   clock_gettime(_CLOCK, &st->start);
   pthread_condattr_t ca;

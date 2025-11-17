@@ -6,6 +6,7 @@
 #include "progress.h"
 #include "queue.h"
 #include "snapshot.h"
+#include "vec_queue.h"
 
 #include <stdatomic.h>
 #include <stdio.h>
@@ -614,20 +615,35 @@ typedef struct {
   uint64_t (*f)(uint64_t *, const prim_ctx_t *);
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
-  queue_t *q;
+  vec_queue_t *vec_q;
   size_t *vecs;
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
-  size_t prefix_depth;
 } worker_t;
+
+typedef struct {
+  queue_t *prefix_q;
+  vec_queue_t *vec_q;
+  size_t m, n_args, prefix_depth;
+  _Atomic size_t *generators_done;
+  size_t *chunk_buf, chunk_count;
+} generator_worker_t;
+
+static void gen_idle(void *ud) {
+  generator_worker_t *gen = ud;
+  if (gen->chunk_count > 0) {
+    vec_queue_push_chunk(gen->vec_q, gen->chunk_buf, gen->chunk_count);
+    gen->chunk_count = 0;
+  }
+}
 
 static void w_resume(void *ud) {
   worker_t *w = ud;
   w->idle = false;
 }
 
-static resume_cb_t w_idle(void *ud) {
+static vec_queue_resume_cb_t w_idle(void *ud) {
   worker_t *w = ud;
   pthread_mutex_lock(w->acc_mu);
   *w->acc = add_mod_u64(*w->acc, *w->l_acc, w->ctx->p);
@@ -637,23 +653,22 @@ static resume_cb_t w_idle(void *ud) {
   return w_resume;
 }
 
-// thread function for doing work on the "maths stuff"
-static void *residue_for_prime(void *ud) {
-  worker_t *worker = ud;
-  uint64_t (*f)(uint64_t *, const prim_ctx_t *) = worker->f;
-  const prim_ctx_t *ctx = worker->ctx;
-  uint64_t m = ctx->m, p = ctx->p,
-           l_acc = 0; // l_acc is where we're going to accumulate the total
-                      // residual from the stuff we pull from our work queue
-  size_t *prefix_buf = worker->vecs;
-  size_t prefix_depth = worker->prefix_depth;
-  size_t n_args = ctx->n_args;
-  worker->l_acc = &l_acc;
+#define N_GENERATOR_WORKERS 2
 
-  size_t sub_scratch[m + 1], full_vec[m], necklace_count = 0;
+static void *gen_necklaces(void *ud) {
+  generator_worker_t *gen = ud;
+  size_t m = gen->m;
+  size_t n_args = gen->n_args;
+  size_t prefix_depth = gen->prefix_depth;
+
+  size_t *prefix_buf = malloc(CHUNK * prefix_depth * sizeof(size_t));
+  size_t *sub_scratch = malloc((m + 1) * sizeof(size_t));
+  assert(prefix_buf && sub_scratch);
+
+  size_t *chunk = gen->chunk_buf;
 
   for (;;) {
-    size_t n_vec = queue_pop(worker->q, prefix_buf, w_idle, worker);
+    size_t n_vec = queue_pop(gen->prefix_q, prefix_buf, gen_idle, gen);
     if (!n_vec)
       break;
 
@@ -664,18 +679,49 @@ static void *residue_for_prime(void *ud) {
       canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,
                              prefix_depth);
 
+      size_t full_vec[m];
       while (canon_iter_next(&sub_iter, full_vec)) {
-        // each vector has len m
-        // each vector contains the multiplicity with which each power of omega
-        // appears in the args i.e. 1 3 7 = 1 lot of w^0, 3 lots of w^1, 7
-        // lots of w^2
-        l_acc = add_mod_u64(l_acc, f(full_vec, ctx), p);
-        ++necklace_count;
+        memcpy(&chunk[gen->chunk_count * m], full_vec, m * sizeof(size_t));
+        ++gen->chunk_count;
+
+        if (gen->chunk_count == VEC_CHUNK_SIZE) {
+          vec_queue_push_chunk(gen->vec_q, chunk, gen->chunk_count);
+          gen->chunk_count = 0;
+        }
       }
     }
-    atomic_fetch_add_explicit(worker->done, necklace_count,
-                              memory_order_relaxed);
-    necklace_count = 0;
+  }
+
+  gen_idle(gen);
+
+  size_t prev =
+      atomic_fetch_add_explicit(gen->generators_done, 1, memory_order_release);
+  if (prev + 1 == N_GENERATOR_WORKERS)
+    vec_queue_set_done(gen->vec_q);
+
+  free(prefix_buf);
+  free(sub_scratch);
+  return NULL;
+}
+
+static void *residue_for_prime(void *ud) {
+  worker_t *worker = ud;
+  uint64_t (*f)(uint64_t *, const prim_ctx_t *) = worker->f;
+  const prim_ctx_t *ctx = worker->ctx;
+  uint64_t m = ctx->m, p = ctx->p,
+           l_acc = 0; // l_acc is where we're going to accumulate the total
+                      // residual from the stuff we pull from our work queue
+  size_t *chunk_buf = worker->vecs;
+  worker->l_acc = &l_acc;
+
+  for (;;) {
+    size_t n_vec =
+        vec_queue_pop_chunk(worker->vec_q, chunk_buf, w_idle, worker);
+    if (!n_vec)
+      break;
+    for (size_t c = 0; c < n_vec; ++c)
+      l_acc = add_mod_u64(l_acc, f(&chunk_buf[c * m], ctx), p);
+    atomic_fetch_add_explicit(worker->done, n_vec, memory_order_relaxed);
   }
 
   (void)w_idle(worker);
@@ -738,16 +784,43 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   size_t prefix_depth = canon_iter_depth_for(m);
 
-  // shared work queue
-  queue_t *q = queue_new(st->n_args, m, prefix_depth, iter_st, st_len,
-                         &st->vecss[st->n_thrds * CHUNK * m]);
+  size_t compute_worker_buf_size = VEC_CHUNK_SIZE * m * st->n_thrds;
+  size_t generator_buf_size = VEC_CHUNK_SIZE * m * N_GENERATOR_WORKERS;
+  size_t prefix_queue_buf_size = CHUNK * prefix_depth * (1 + Q_CAP);
+
+  size_t *compute_worker_bufs = st->vecss;
+  size_t *generator_bufs = &st->vecss[compute_worker_buf_size];
+  size_t *prefix_queue_buf =
+      &st->vecss[compute_worker_buf_size + generator_buf_size];
+  size_t *vec_queue_buf =
+      &st->vecss[compute_worker_buf_size + generator_buf_size +
+                 prefix_queue_buf_size];
+
+  queue_t *prefix_q =
+      queue_new(st->n_args, m, prefix_depth, iter_st, st_len, prefix_queue_buf);
+  vec_queue_t *vec_q = vec_queue_new(m, vec_queue_buf);
 
   progress_t prog;
   // progress bar stuff
   if (!st->quiet)
-    progress_start(&prog, p, &done, siz, &q->fill);
+    progress_start(&prog, p, &done, siz, &prefix_q->fill, &vec_q->fill);
 
-  // make some threads
+  _Atomic size_t generators_done = 0;
+  pthread_t gen_workers[N_GENERATOR_WORKERS];
+  generator_worker_t gen_ctxs[N_GENERATOR_WORKERS];
+  for (size_t i = 0; i < N_GENERATOR_WORKERS; ++i) {
+    gen_ctxs[i] = (generator_worker_t){
+        .prefix_q = prefix_q,
+        .vec_q = vec_q,
+        .m = m,
+        .n_args = st->n_args,
+        .prefix_depth = prefix_depth,
+        .generators_done = &generators_done,
+        .chunk_buf = &generator_bufs[i * VEC_CHUNK_SIZE * m],
+        .chunk_count = 0};
+    pthread_create(&gen_workers[i], NULL, gen_necklaces, &gen_ctxs[i]);
+  }
+
   pthread_t worker[st->n_thrds];
   worker_t w_ctxs[st->n_thrds];
   bool *idles[st->n_thrds];
@@ -758,27 +831,28 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     w_ctxs[i] = (worker_t){.ctx = ctx,
                            .f = fn,
                            .done = &done,
-                           .q = q,
-                           .vecs = &st->vecss[i * CHUNK * m],
+                           .vec_q = vec_q,
+                           .vecs = &compute_worker_bufs[i * VEC_CHUNK_SIZE * m],
                            .idle = false,
                            .acc = &acc,
-                           .acc_mu = &acc_mu,
-                           .prefix_depth = prefix_depth};
+                           .acc_mu = &acc_mu};
     idles[i] = &w_ctxs[i].idle;
-    // worker threads
     pthread_create(&worker[i], NULL, residue_for_prime, &w_ctxs[i]);
   }
 
   snapshot_t ss;
   if (st->snapshot)
-    snapshot_start(&ss, st->mode, n, p, st->n_thrds, q, idles, &done, &acc);
+    snapshot_start(&ss, st->mode, n, p, st->n_thrds, prefix_q, vec_q, idles,
+                   &done, &acc);
 
-  queue_fill(q);
-
+  queue_fill(prefix_q);
+  for (size_t i = 0; i < N_GENERATOR_WORKERS; ++i)
+    pthread_join(gen_workers[i], NULL);
   for (size_t i = 0; i < st->n_thrds; ++i)
     pthread_join(worker[i], NULL);
 
-  queue_free(q);
+  queue_free(prefix_q);
+  vec_queue_free(vec_q);
   if (st->snapshot)
     snapshot_stop(&ss);
 
@@ -825,9 +899,13 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
   size_t prefix_depth = canon_iter_depth_for(m);
   bool borrowed = vecss;
   if (!vecss) {
-    size_t worker_buf_size = CHUNK * m * n_thrds;
-    size_t queue_buf_size = CHUNK * prefix_depth * (1 + Q_CAP);
-    vecss = malloc((worker_buf_size + queue_buf_size) * sizeof(size_t));
+    size_t compute_worker_buf_size = VEC_CHUNK_SIZE * m * n_thrds;
+    size_t generator_buf_size = VEC_CHUNK_SIZE * m * N_GENERATOR_WORKERS;
+    size_t prefix_queue_buf_size = CHUNK * prefix_depth * (1 + Q_CAP);
+    size_t vec_queue_buf_size = VEC_CHUNK_SIZE * m * VEC_Q_CAP;
+    size_t total = compute_worker_buf_size + generator_buf_size +
+                   prefix_queue_buf_size + vec_queue_buf_size;
+    vecss = malloc(total * sizeof(size_t));
     assert(vecss);
   }
   *st = (proc_state_t){.mode = mode,

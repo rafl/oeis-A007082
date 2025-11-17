@@ -39,9 +39,9 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
     return;
   };
 
-  uint64_t iter_st[6 + st->q->m + 1];
-  size_t st_len =
-      queue_save(st->q, iter_st, (6 + st->q->m + 1) * sizeof(uint64_t));
+  uint64_t iter_st[6 + st->prefix_q->m + 1];
+  size_t st_len = queue_save(st->prefix_q, iter_st,
+                             (6 + st->prefix_q->m + 1) * sizeof(uint64_t));
   uint64_t data[3] = {idx, *st->acc, st_len};
   if (write(fd, &data, sizeof(data)) != 3 * sizeof(uint64_t)) {
     printf("\nfailed to snapshot (write) %zu %" PRIu64 "\n", idx, *st->acc);
@@ -67,14 +67,36 @@ static void *snapshot(void *ud) {
   while (!st->quit) {
     struct timespec now;
     clock_gettime(_CLOCK, &now);
-    now.tv_sec += 60 * 30;
+    now.tv_sec += 5;
     pthread_cond_timedwait(&st->cv, &st->mu, &now);
     if (st->quit)
       break;
 
-    pthread_mutex_lock(&st->q->mu);
-    st->q->pause = true;
-    pthread_mutex_unlock(&st->q->mu);
+    pthread_mutex_lock(&st->prefix_q->mu);
+    st->prefix_q->pause = true;
+    pthread_mutex_unlock(&st->prefix_q->mu);
+
+    // i think we could not do some of this? whatever this seems safest for now
+    // and doesn't cost anything.
+    bool prefix_q_drained;
+    do {
+      atomic_thread_fence(memory_order_seq_cst);
+      size_t prefix_q_fill =
+          atomic_load_explicit(&st->prefix_q->fill, memory_order_relaxed);
+      prefix_q_drained = (prefix_q_fill == 0);
+      if (!prefix_q_drained)
+        usleep(1000);
+    } while (!prefix_q_drained);
+
+    bool vec_q_drained;
+    do {
+      atomic_thread_fence(memory_order_seq_cst);
+      size_t vec_q_fill =
+          atomic_load_explicit(&st->vec_q->fill, memory_order_relaxed);
+      vec_q_drained = (vec_q_fill == 0);
+      if (!vec_q_drained)
+        usleep(1000);
+    } while (!vec_q_drained);
 
     bool all_paused;
     do {
@@ -92,24 +114,25 @@ static void *snapshot(void *ud) {
 
     snapshot_save(st, atomic_load_explicit(st->idx, memory_order_seq_cst));
 
-    pthread_mutex_lock(&st->q->mu);
-    st->q->pause = false;
-    pthread_mutex_unlock(&st->q->mu);
-    pthread_cond_signal(&st->q->resume);
+    pthread_mutex_lock(&st->prefix_q->mu);
+    st->prefix_q->pause = false;
+    pthread_mutex_unlock(&st->prefix_q->mu);
+    pthread_cond_broadcast(&st->prefix_q->resume);
   }
   pthread_mutex_unlock(&st->mu);
   return NULL;
 }
 
 void snapshot_start(snapshot_t *ss, process_mode_t mode, uint64_t n, uint64_t p,
-                    size_t n_thrds, queue_t *q, bool **paused,
-                    _Atomic size_t *idx, uint64_t *acc) {
+                    size_t n_thrds, queue_t *prefix_q, vec_queue_t *vec_q,
+                    bool **paused, _Atomic size_t *idx, uint64_t *acc) {
   snapshot_st_t *st = &ss->st;
   *st = (snapshot_st_t){.mode = mode,
                         .n = n,
                         .p = p,
                         .n_thrds = n_thrds,
-                        .q = q,
+                        .prefix_q = prefix_q,
+                        .vec_q = vec_q,
                         .paused = paused,
                         .idx = idx,
                         .acc = acc};

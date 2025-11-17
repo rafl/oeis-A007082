@@ -67,14 +67,13 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
   pthread_mutex_unlock(&q->mu);
 }
 
-size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
+size_t queue_pop(queue_t *q, size_t *out, queue_idle_cb_t onidle, void *ud) {
   size_t stride = q->prefix_depth;
   pthread_mutex_lock(&q->mu);
 
   while (q->fill == 0 && !q->done) {
-    resume_cb_t resume = onidle(ud);
+    onidle(ud);
     pthread_cond_wait(&q->not_empty, &q->mu);
-    resume(ud);
   }
 
   if (q->fill == 0 && q->done) {
