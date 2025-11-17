@@ -671,9 +671,7 @@ static void CUDART_CB gpu_batch_done(void *data) {
   }
 
   // Merge into shared accumulator
-  pthread_mutex_lock(w->acc_mu);
-  *w->acc = add_mod_u64(*w->acc, local_acc, p);
-  pthread_mutex_unlock(w->acc_mu);
+  *w->l_acc = add_mod_u64(*w->l_acc, local_acc, p);
 
   // Bump done counter
   atomic_fetch_add_explicit(w->done, n_vec, memory_order_relaxed);
