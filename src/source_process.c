@@ -790,9 +790,7 @@ static int gpu_wait_for_free_batch(worker_t *worker, bool *batch_busy) {
 // Helper: send a class buffer to GPU
 static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
                                   vec_batch_t **batches, uint64_t **full_vecs_buffers,
-                                  bool *batch_busy,
-                                  size_t *total_batches, size_t *total_vectors,
-                                  size_t *full_batches) {
+                                  bool *batch_busy) {
   if (accum->n_vec == 0)
     return;
 
@@ -807,12 +805,6 @@ static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
 
   vec_batch_clear(batch);
   vec_batch_add_bulk(batch, gpu_buf, accum->n_vec);
-
-  // Update statistics
-  (*total_batches)++;
-  (*total_vectors) += accum->n_vec;
-  if (accum->n_vec == GPU_BATCH_SIZE)
-    (*full_batches)++;
 
   // Launch async GPU compute
   gpu_batch_ctx_t *cb = (gpu_batch_ctx_t *)malloc(sizeof *cb);
@@ -876,11 +868,6 @@ static void *residue_for_prime_gpu(void *ud) {
   size_t prefix_depth = worker->prefix_depth;
   size_t n_args = ctx->n_args;
 
-  // Batch statistics
-  size_t total_batches = 0;
-  size_t total_vectors = 0;
-  size_t full_batches = 0;
-
   // Main loop: pull vectors and route to class buffers
   for (;;) {
     size_t n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);
@@ -906,8 +893,7 @@ static void *residue_for_prime_gpu(void *ud) {
         // If buffer is full, send to GPU
         if (accum->n_vec == GPU_BATCH_SIZE) {
           gpu_send_class_buffer(worker, accum, batches, full_vecs_buffers,
-                                batch_busy, &total_batches, &total_vectors,
-                                &full_batches);
+                                batch_busy);
         }
       }
     }
@@ -917,20 +903,11 @@ static void *residue_for_prime_gpu(void *ud) {
   for (size_t c = 0; c < n_classes; c++) {
     if (class_accums[c].n_vec > 0) {
       gpu_send_class_buffer(worker, &class_accums[c], batches, full_vecs_buffers,
-                            batch_busy, &total_batches, &total_vectors,
-                            &full_batches);
+                            batch_busy);
     }
   }
 
   (void)w_idle(worker);
-
-  // Print batch statistics
-  if (total_batches > 0) {
-    double avg_size = (double)total_vectors / total_batches;
-    fprintf(stderr, "GPU batches: %zu total, %zu full (%.1f%%), avg size: %.1f / %zu (%.1f%%)\n",
-            total_batches, full_batches, 100.0 * full_batches / total_batches,
-            avg_size, (size_t)GPU_BATCH_SIZE, 100.0 * avg_size / GPU_BATCH_SIZE);
-  }
 
   // Cleanup
   for (size_t c = 0; c < n_classes; c++) {
