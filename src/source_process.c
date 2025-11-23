@@ -756,16 +756,6 @@ static void *residue_for_prime(void *ud) {
 // Controls how many full vectors are sent to GPU at once
 #define GPU_BATCH_SIZE (1UL << 15)
 
-// Count non-zero entries in a vector (determines its "class")
-static inline size_t count_nonzero(const uint64_t *vec, size_t m) {
-  size_t count = 0;
-  for (size_t i = 0; i < m; i++) {
-    if (vec[i] != 0)
-      count++;
-  }
-  return count;
-}
-
 // Per-class accumulation buffer
 typedef struct {
   uint64_t *vecs;  // accumulated vectors for this class
@@ -934,7 +924,7 @@ static void *residue_for_prime_gpu(void *ud) {
       uint64_t vec[m];
       while (canon_iter_next(&sub_iter, vec)) {
         // Determine class and add to appropriate buffer
-        size_t vec_class = count_nonzero(vec, m);
+        size_t vec_class = sub_iter.nonzero_count;
         class_accum_t *accum = &class_accums[vec_class];
 
         // Copy vector to accumulator

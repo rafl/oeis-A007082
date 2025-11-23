@@ -19,6 +19,7 @@ void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
   it->sum = 0;
   it->depth = depth;
   it->start_depth = 0;
+  it->nonzero_count = 0;
   it->stage = ITER_STAGE_DESCEND;
 }
 
@@ -49,6 +50,13 @@ void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
   it->start_depth = in[5];
   it->scratch = scratch;
   memcpy(it->scratch, in + 6, (m + 1) * sizeof(uint64_t));
+
+  // Compute nonzero_count from restored scratch buffer
+  it->nonzero_count = 0;
+  for (size_t i = 1; i < it->t; ++i) {
+    if (it->scratch[i] != 0)
+      it->nonzero_count++;
+  }
 }
 
 bool canon_iter_next(canon_iter_t *it, size_t *vec) {
@@ -86,6 +94,8 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
       if (it->sum + v <= tot) {
         a[it->t] = v;
         it->sum += v;
+        if (v != 0)
+          it->nonzero_count++;
         ++it->t;
         break;
       }
@@ -103,6 +113,8 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
       }
 
       it->sum += v;
+      if (v != 0)
+        it->nonzero_count++;
       ++it->t;
       it->p = it->t - 1;
       it->stage = ITER_STAGE_DESCEND;
@@ -114,6 +126,8 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
       if (it->t <= it->start_depth)
         return false;
 
+      if (a[it->t] != 0)
+        it->nonzero_count--;
       it->sum -= a[it->t];
       if (a[it->t] == 0) {
         break;
@@ -139,8 +153,11 @@ void canon_iter_from_prefix(canon_iter_t *it, size_t m, size_t tot,
          (m - prefix_depth) * sizeof(size_t));
 
   it->sum = 0;
+  it->nonzero_count = 0;
   for (size_t i = 1; i <= prefix_depth; ++i) {
     it->sum += it->scratch[i];
+    if (it->scratch[i] != 0)
+      it->nonzero_count++;
   }
 
   it->t = prefix_depth + 1;

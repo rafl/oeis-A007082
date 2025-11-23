@@ -14,6 +14,7 @@ typedef struct {
   size_t m, tot, *scratch, t, p, sum;
   size_t depth;       // target depth: emit result when t == depth + 1
   size_t start_depth; // backtracking stops when t <= start_depth
+  size_t nonzero_count; // number of non-zero elements in current vector
   canon_iter_stage_t stage;
 } canon_iter_t;
 
