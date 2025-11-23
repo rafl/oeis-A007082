@@ -68,14 +68,14 @@ CUDA_OBJS := $(patsubst $(SRC_DIR)/%.cu,$(OBJ_DIR)/%.o,$(CUDA_SRCS))
 OBJS += $(CUDA_OBJS)
 endif
 
-MAIN_FILES := oeis.c nnecklaces.c nprefix.c
+MAIN_FILES := oeis.c nnecklaces.c nprefix.c test_snapshot_gpu.c
 MAIN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(MAIN_FILES))
 
 UTIL_OBJS := $(filter-out $(MAIN_OBJS),$(OBJS))
 
 TARGETS := $(patsubst %.c,%,$(MAIN_FILES))
 
-.PHONY: all gen use optimised clean pgo-clean test fmt
+.PHONY: all gen use optimised clean pgo-clean test stress-test fmt
 
 all: $(if $(filter use,$(PGO)),$(PROFDATA)) $(TARGETS)
 
@@ -122,6 +122,9 @@ pgo-clean:
 
 test: oeis
 	@bash test.sh $(N)
+
+stress-test: test_snapshot_gpu
+	./test_snapshot_gpu
 
 fmt:
 	bash -c 'shopt -s globstar; clang-format -i -- src/**.c{,u} include/**.h'

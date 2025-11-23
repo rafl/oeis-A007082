@@ -787,6 +787,47 @@ static int gpu_wait_for_free_batch(worker_t *worker, bool *batch_busy) {
   }
 }
 
+// Context for GPU worker idle callback (needs to flush buffers before idle)
+typedef struct {
+  worker_t *worker;
+  class_accum_t *class_accums;
+  size_t n_classes;
+  vec_batch_t **batches;
+  uint64_t **full_vecs_buffers;
+  bool *batch_busy;
+} gpu_idle_ctx_t;
+
+// Resume callback for GPU worker - extracts worker from idle_ctx
+static void gpu_w_resume(void *ud) {
+  gpu_idle_ctx_t *ctx = ud;
+  w_resume(ctx->worker);
+}
+
+// Forward declaration
+static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
+                                  vec_batch_t **batches, uint64_t **full_vecs_buffers,
+                                  bool *batch_busy);
+
+// GPU worker idle callback: flush all class buffers before going idle
+static resume_cb_t gpu_w_idle(void *ud) {
+  gpu_idle_ctx_t *ctx = ud;
+
+  // Flush all class buffers before going idle
+  for (size_t c = 0; c < ctx->n_classes; c++) {
+    if (ctx->class_accums[c].n_vec > 0) {
+      gpu_send_class_buffer(ctx->worker, &ctx->class_accums[c],
+                            ctx->batches, ctx->full_vecs_buffers,
+                            ctx->batch_busy);
+    }
+  }
+
+  // Call the real w_idle to wait for GPU and merge accumulator
+  (void)w_idle(ctx->worker);
+
+  // Return gpu_w_resume which properly extracts worker from ctx
+  return gpu_w_resume;
+}
+
 // Helper: send a class buffer to GPU
 static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
                                   vec_batch_t **batches, uint64_t **full_vecs_buffers,
@@ -868,9 +909,19 @@ static void *residue_for_prime_gpu(void *ud) {
   size_t prefix_depth = worker->prefix_depth;
   size_t n_args = ctx->n_args;
 
+  // Context for idle callback that flushes buffers
+  gpu_idle_ctx_t idle_ctx = {
+    .worker = worker,
+    .class_accums = class_accums,
+    .n_classes = n_classes,
+    .batches = batches,
+    .full_vecs_buffers = full_vecs_buffers,
+    .batch_busy = batch_busy,
+  };
+
   // Main loop: pull vectors and route to class buffers
   for (;;) {
-    size_t n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);
+    size_t n_prefixes = queue_pop(worker->q, prefix_buf, gpu_w_idle, &idle_ctx);
     if (n_prefixes == 0)
       break;
 
@@ -899,15 +950,8 @@ static void *residue_for_prime_gpu(void *ud) {
     }
   }
 
-  // Flush any remaining vectors in class buffers
-  for (size_t c = 0; c < n_classes; c++) {
-    if (class_accums[c].n_vec > 0) {
-      gpu_send_class_buffer(worker, &class_accums[c], batches, full_vecs_buffers,
-                            batch_busy);
-    }
-  }
-
-  (void)w_idle(worker);
+  // Final idle - gpu_w_idle will flush any remaining vectors
+  (void)gpu_w_idle(&idle_ctx);
 
   // Cleanup
   for (size_t c = 0; c < n_classes; c++) {

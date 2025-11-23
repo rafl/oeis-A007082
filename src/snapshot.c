@@ -28,9 +28,21 @@ static void get_snapshot_path(process_mode_t mode, uint64_t n, uint64_t p,
   snprintf(buf, len, ".%" PRIu64 ".%" PRIu64 "%s.ss", n, p, infix[mode]);
 }
 
+// Counter for numbered snapshots (when SNAPSHOT_MULTI is set)
+static _Atomic int snapshot_counter = 0;
+
 static void snapshot_save(snapshot_st_t *st, size_t idx) {
   char path[PATH_MAX - 4], tmp[PATH_MAX];
-  get_snapshot_path(st->mode, st->n, st->p, path, sizeof(path));
+
+  // Check if we should save numbered snapshots
+  char *multi = getenv("SNAPSHOT_MULTI");
+  if (multi && multi[0] == '1') {
+    int num = atomic_fetch_add(&snapshot_counter, 1);
+    snprintf(path, sizeof(path), ".%" PRIu64 ".%" PRIu64 "%s.ss.%d",
+             st->n, st->p, infix[st->mode], num);
+  } else {
+    get_snapshot_path(st->mode, st->n, st->p, path, sizeof(path));
+  }
   snprintf(tmp, sizeof(tmp), "%s.tmp", path);
 
   int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -63,11 +75,26 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
 
 static void *snapshot(void *ud) {
   snapshot_st_t *st = ud;
+
+  // Check for custom snapshot interval (in milliseconds)
+  long interval_ms = 1800000; // default 30 minutes
+  char *env = getenv("SNAPSHOT_INTERVAL_MS");
+  if (env) {
+    long val = strtol(env, NULL, 10);
+    if (val > 0)
+      interval_ms = val;
+  }
+
   pthread_mutex_lock(&st->mu);
   while (!st->quit) {
     struct timespec now;
     clock_gettime(_CLOCK, &now);
-    now.tv_sec += 30 * 60;
+    now.tv_sec += interval_ms / 1000;
+    now.tv_nsec += (interval_ms % 1000) * 1000000;
+    if (now.tv_nsec >= 1000000000) {
+      now.tv_sec += 1;
+      now.tv_nsec -= 1000000000;
+    }
     pthread_cond_timedwait(&st->cv, &st->mu, &now);
     if (st->quit)
       break;
