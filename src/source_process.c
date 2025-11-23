@@ -871,17 +871,20 @@ static void *residue_for_prime_gpu(void *ud) {
   // Calculate n_rs (same formula as in prim_ctx_new)
   size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
 
+  // Create shared GPU context with constant lookup tables
+  gpu_context_t *gpu_ctx = gpu_context_new(
+      ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash, ctx->r, ctx->r3,
+      ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M, ctx->ws_M,
+      ctx->jk_sums_pow_lower_M, ctx->jk_sums_pow_upper_M, ctx->rs,
+      ctx->fact_M, ctx->fact_inv_M, ctx->m_half, n_rs, is_jack_mode);
+
   // Pool of GPU batches for sending to device
   vec_batch_t *batches[NUM_GPU_BUFFERS];
   uint64_t *full_vecs_buffers[NUM_GPU_BUFFERS];
   bool batch_busy[NUM_GPU_BUFFERS];
 
   for (int i = 0; i < NUM_GPU_BUFFERS; i++) {
-    batches[i] = vec_batch_new(
-        GPU_BATCH_SIZE, ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash,
-        ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M, ctx->ws_M,
-        ctx->jk_sums_pow_lower_M, ctx->jk_sums_pow_upper_M, ctx->rs,
-        ctx->fact_M, ctx->fact_inv_M, ctx->m_half, n_rs, is_jack_mode);
+    batches[i] = vec_batch_new(gpu_ctx, GPU_BATCH_SIZE);
     full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(uint64_t));
     batch_busy[i] = false;
   }
@@ -953,6 +956,9 @@ static void *residue_for_prime_gpu(void *ud) {
     vec_batch_free(batches[i]);
     free(full_vecs_buffers[i]);
   }
+
+  // Free shared GPU context
+  gpu_context_free(gpu_ctx);
 
   return NULL;
 }

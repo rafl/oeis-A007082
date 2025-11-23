@@ -22,6 +22,26 @@
 
 typedef unsigned __int128 uint128_t;
 
+// Device-side context struct - passed to kernel as single pointer
+struct gpu_kernel_ctx_t {
+  // Device pointers to lookup tables
+  uint64_t *d_jk_prod_M;
+  uint64_t *d_nat_M;
+  uint64_t *d_nat_inv_M;
+  uint64_t *d_ws_M;
+  uint64_t *d_jk_sums_pow_lower_M;
+  uint64_t *d_jk_sums_pow_upper_M;
+  uint64_t *d_rs;
+  uint64_t *d_fact_M;
+  uint64_t *d_fact_inv_M;
+
+  // Parameters
+  uint64_t n;
+  uint64_t n_args;
+  uint64_t p, p_dash, r, r3;
+  bool is_jack_mode;
+};
+
 // Helper function for jk_pos on device
 template <size_t M> __device__ inline size_t d_jk_pos(size_t j, size_t k) {
   int64_t result = k - j;
@@ -298,17 +318,30 @@ __device__ size_t d_jack_snd_trm_build_matrix(const uint64_t *c,
 // Each thread processes one coefficient vector and produces final result
 template <size_t M, size_t M_HALF>
 __global__ void
-vec_full_kernel(const uint64_t *vecs, size_t n_vecs, uint64_t n,
-                uint64_t n_args, bool is_jack_mode, const uint64_t *d_jk_prod_M,
-                const uint64_t *d_nat_M, const uint64_t *d_nat_inv_M,
-                const uint64_t *d_ws_M, const uint64_t *d_jk_sums_pow_lower_M,
-                const uint64_t *d_jk_sums_pow_upper_M, const uint64_t *d_rs,
-                const uint64_t *d_fact_M, const uint64_t *d_fact_inv_M,
-                uint64_t *results, uint64_t p, uint64_t p_dash, uint64_t r,
-                uint64_t r3) {
+vec_full_kernel(const uint64_t *vecs, size_t n_vecs,
+                const gpu_kernel_ctx_t *ctx, uint64_t *results) {
   size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (vec_idx >= n_vecs)
     return;
+
+  // Load context values into registers
+  const uint64_t p = ctx->p;
+  const uint64_t p_dash = ctx->p_dash;
+  const uint64_t r = ctx->r;
+  const uint64_t r3 = ctx->r3;
+  const uint64_t n = ctx->n;
+  const uint64_t n_args = ctx->n_args;
+  const bool is_jack_mode = ctx->is_jack_mode;
+
+  const uint64_t *d_jk_prod_M = ctx->d_jk_prod_M;
+  const uint64_t *d_nat_M = ctx->d_nat_M;
+  const uint64_t *d_nat_inv_M = ctx->d_nat_inv_M;
+  const uint64_t *d_ws_M = ctx->d_ws_M;
+  const uint64_t *d_jk_sums_pow_lower_M = ctx->d_jk_sums_pow_lower_M;
+  const uint64_t *d_jk_sums_pow_upper_M = ctx->d_jk_sums_pow_upper_M;
+  const uint64_t *d_rs = ctx->d_rs;
+  const uint64_t *d_fact_M = ctx->d_fact_M;
+  const uint64_t *d_fact_inv_M = ctx->d_fact_inv_M;
 
   const uint64_t *vec = &vecs[vec_idx * M];
 
@@ -451,18 +484,12 @@ int gpu_device_count(void) {
   return device_count;
 }
 
-struct vec_batch_t {
-  // Host data (pinned for async transfers)
-  uint64_t *h_vecs;    // max_vecs * m
-  uint64_t *h_results; // max_vecs
-
-  // Device data - matrix computation
-  uint64_t *d_vecs;
-  uint64_t *d_jk_prod_M;
-  uint64_t *d_nat_M;
-  uint64_t *d_nat_inv_M;
-
-  // Device data - full computation lookup tables
+// Shared context for constant data (one per worker)
+struct gpu_context_t {
+  // Device data - constant lookup tables
+  uint64_t *d_jk_prod_M;           // m
+  uint64_t *d_nat_M;               // n+1
+  uint64_t *d_nat_inv_M;           // n+1 (NULL for jack mode)
   uint64_t *d_ws_M;                // m
   uint64_t *d_jk_sums_pow_lower_M; // POW_CACHE_DIVISOR * m_half
   uint64_t *d_jk_sums_pow_upper_M; // POW_CACHE_DIVISOR * m_half
@@ -470,17 +497,14 @@ struct vec_batch_t {
   uint64_t *d_fact_M;              // n+1
   uint64_t *d_fact_inv_M;          // n+1
 
-  uint64_t *d_results;
+  // Device-side kernel context (single struct with all pointers/params)
+  gpu_kernel_ctx_t *d_ctx;
 
-  // CUDA streams for pipelining
-  cudaStream_t stream;
-
-  // Batch parameters
-  size_t max_vecs;
-  size_t count;
+  // Context parameters
   uint64_t n;
   uint64_t n_args;
   uint64_t m;
+  size_t m_half;
   size_t n_rs;
   bool is_jack_mode;
 
@@ -488,81 +512,151 @@ struct vec_batch_t {
   uint64_t p, p_dash, r, r3;
 };
 
-vec_batch_t *vec_batch_new(
-    size_t max_vecs, uint64_t n, uint64_t n_args, uint64_t m, uint64_t p,
-    uint64_t p_dash, uint64_t r, uint64_t r3, const uint64_t *jk_prod_M,
-    const uint64_t *nat_M, const uint64_t *nat_inv_M, const uint64_t *ws_M,
+// Per-batch data (multiple per worker for pipelining)
+struct vec_batch_t {
+  // Host data (pinned for async transfers)
+  uint64_t *h_vecs;    // max_vecs * m
+  uint64_t *h_results; // max_vecs
+
+  // Device data - per-batch only
+  uint64_t *d_vecs;
+  uint64_t *d_results;
+
+  // CUDA stream for pipelining
+  cudaStream_t stream;
+
+  // Batch parameters
+  size_t max_vecs;
+  size_t count;
+
+  // Pointer to shared context
+  gpu_context_t *ctx;
+};
+
+gpu_context_t *gpu_context_new(
+    uint64_t n, uint64_t n_args, uint64_t m, uint64_t p, uint64_t p_dash,
+    uint64_t r, uint64_t r3, const uint64_t *jk_prod_M, const uint64_t *nat_M,
+    const uint64_t *nat_inv_M, const uint64_t *ws_M,
     const uint64_t *jk_sums_pow_lower_M, const uint64_t *jk_sums_pow_upper_M,
     const uint64_t *rs, const uint64_t *fact_M, const uint64_t *fact_inv_M,
     size_t m_half, size_t n_rs, bool is_jack_mode) {
+  gpu_context_t *ctx = (gpu_context_t *)malloc(sizeof(gpu_context_t));
+  assert(ctx);
+
+  ctx->n = n;
+  ctx->n_args = n_args;
+  ctx->m = m;
+  ctx->m_half = m_half;
+  ctx->n_rs = n_rs;
+  ctx->p = p;
+  ctx->p_dash = p_dash;
+  ctx->r = r;
+  ctx->r3 = r3;
+  ctx->is_jack_mode = is_jack_mode;
+
+  // Allocate device memory for constant lookup tables
+  CUDA_CHECK(cudaMalloc(&ctx->d_jk_prod_M, m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_nat_M, (n + 1) * sizeof(uint64_t)));
+  if (!is_jack_mode) {
+    CUDA_CHECK(cudaMalloc(&ctx->d_nat_inv_M, (n + 1) * sizeof(uint64_t)));
+  } else {
+    ctx->d_nat_inv_M = NULL;
+  }
+  CUDA_CHECK(cudaMalloc(&ctx->d_ws_M, m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_jk_sums_pow_lower_M,
+                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_jk_sums_pow_upper_M,
+                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_rs, n_rs * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_fact_M, (n + 1) * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_fact_inv_M, (n + 1) * sizeof(uint64_t)));
+
+  // Copy constant data to device
+  CUDA_CHECK(cudaMemcpy(ctx->d_jk_prod_M, jk_prod_M, m * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_nat_M, nat_M, (n + 1) * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  if (!is_jack_mode) {
+    CUDA_CHECK(cudaMemcpy(ctx->d_nat_inv_M, nat_inv_M,
+                          (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
+  }
+  CUDA_CHECK(cudaMemcpy(ctx->d_ws_M, ws_M, m * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_jk_sums_pow_lower_M, jk_sums_pow_lower_M,
+                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_jk_sums_pow_upper_M, jk_sums_pow_upper_M,
+                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_rs, rs, n_rs * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_fact_M, fact_M, (n + 1) * sizeof(uint64_t),
+                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_fact_inv_M, fact_inv_M,
+                        (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
+
+  // Create device-side kernel context struct
+  gpu_kernel_ctx_t h_ctx = {
+      .d_jk_prod_M = ctx->d_jk_prod_M,
+      .d_nat_M = ctx->d_nat_M,
+      .d_nat_inv_M = ctx->d_nat_inv_M,
+      .d_ws_M = ctx->d_ws_M,
+      .d_jk_sums_pow_lower_M = ctx->d_jk_sums_pow_lower_M,
+      .d_jk_sums_pow_upper_M = ctx->d_jk_sums_pow_upper_M,
+      .d_rs = ctx->d_rs,
+      .d_fact_M = ctx->d_fact_M,
+      .d_fact_inv_M = ctx->d_fact_inv_M,
+      .n = n,
+      .n_args = n_args,
+      .p = p,
+      .p_dash = p_dash,
+      .r = r,
+      .r3 = r3,
+      .is_jack_mode = is_jack_mode,
+  };
+  CUDA_CHECK(cudaMalloc(&ctx->d_ctx, sizeof(gpu_kernel_ctx_t)));
+  CUDA_CHECK(cudaMemcpy(ctx->d_ctx, &h_ctx, sizeof(gpu_kernel_ctx_t),
+                        cudaMemcpyHostToDevice));
+
+  return ctx;
+}
+
+void gpu_context_free(gpu_context_t *ctx) {
+  if (!ctx)
+    return;
+
+  CUDA_CHECK(cudaFree(ctx->d_jk_prod_M));
+  CUDA_CHECK(cudaFree(ctx->d_nat_M));
+  if (ctx->d_nat_inv_M)
+    CUDA_CHECK(cudaFree(ctx->d_nat_inv_M));
+  CUDA_CHECK(cudaFree(ctx->d_ws_M));
+  CUDA_CHECK(cudaFree(ctx->d_jk_sums_pow_lower_M));
+  CUDA_CHECK(cudaFree(ctx->d_jk_sums_pow_upper_M));
+  CUDA_CHECK(cudaFree(ctx->d_rs));
+  CUDA_CHECK(cudaFree(ctx->d_fact_M));
+  CUDA_CHECK(cudaFree(ctx->d_fact_inv_M));
+  CUDA_CHECK(cudaFree(ctx->d_ctx));
+
+  free(ctx);
+}
+
+vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs) {
   vec_batch_t *batch = (vec_batch_t *)malloc(sizeof(vec_batch_t));
   assert(batch);
 
+  batch->ctx = ctx;
   batch->max_vecs = max_vecs;
   batch->count = 0;
-  batch->n = n;
-  batch->n_args = n_args;
-  batch->m = m;
-  batch->n_rs = n_rs;
-  batch->p = p;
-  batch->p_dash = p_dash;
-  batch->r = r;
-  batch->r3 = r3;
-  batch->is_jack_mode = is_jack_mode;
 
   // Allocate pinned host memory for faster async transfers
-  CUDA_CHECK(cudaMallocHost(&batch->h_vecs, max_vecs * m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMallocHost(&batch->h_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
   CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(uint64_t)));
 
   CUDA_CHECK(cudaStreamCreate(&batch->stream));
 
-  // Allocate device memory - matrix computation
-  CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_jk_prod_M, m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_nat_M, (n + 1) * sizeof(uint64_t)));
-  if (!is_jack_mode) {
-    CUDA_CHECK(cudaMalloc(&batch->d_nat_inv_M, (n + 1) * sizeof(uint64_t)));
-  } else {
-    batch->d_nat_inv_M = NULL;
-  }
-
-  // Allocate device memory - full computation lookup tables
-  CUDA_CHECK(cudaMalloc(&batch->d_ws_M, m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_jk_sums_pow_lower_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_jk_sums_pow_upper_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_rs, n_rs * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_fact_M, (n + 1) * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_fact_inv_M, (n + 1) * sizeof(uint64_t)));
-
+  // Allocate device memory - per-batch only
+  CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
   CUDA_CHECK(cudaMalloc(&batch->d_results, max_vecs * sizeof(uint64_t)));
-
-  // Copy constant data to device - matrix computation
-  CUDA_CHECK(cudaMemcpy(batch->d_jk_prod_M, jk_prod_M, m * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_nat_M, nat_M, (n + 1) * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  if (!is_jack_mode) {
-    CUDA_CHECK(cudaMemcpy(batch->d_nat_inv_M, nat_inv_M,
-                          (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
-  }
-
-  // Copy constant data to device - full computation lookup tables
-  CUDA_CHECK(cudaMemcpy(batch->d_ws_M, ws_M, m * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_jk_sums_pow_lower_M, jk_sums_pow_lower_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_jk_sums_pow_upper_M, jk_sums_pow_upper_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_rs, rs, n_rs * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_fact_M, fact_M, (n + 1) * sizeof(uint64_t),
-                        cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(batch->d_fact_inv_M, fact_inv_M,
-                        (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
 
   return batch;
 }
@@ -570,23 +664,21 @@ vec_batch_t *vec_batch_new(
 size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec) {
   assert(batch->count < batch->max_vecs);
   size_t idx = batch->count++;
-  memcpy(&batch->h_vecs[idx * batch->m], vec, batch->m * sizeof(uint64_t));
+  size_t m = batch->ctx->m;
+  memcpy(&batch->h_vecs[idx * m], vec, m * sizeof(uint64_t));
   return idx;
 }
 
 void vec_batch_add_bulk(vec_batch_t *batch, const uint64_t *vecs, size_t count) {
   assert(batch->count + count <= batch->max_vecs);
-  memcpy(&batch->h_vecs[batch->count * batch->m], vecs, count * batch->m * sizeof(uint64_t));
+  size_t m = batch->ctx->m;
+  memcpy(&batch->h_vecs[batch->count * m], vecs, count * m * sizeof(uint64_t));
   batch->count += count;
 }
 
 #define LAUNCH_KERNEL(M, stream, count)                                        \
   vec_full_kernel<M, (M + 1) / 2><<<num_blocks, block_size, 0, stream>>>(      \
-      batch->d_vecs, (count), batch->n, batch->n_args, batch->is_jack_mode,    \
-      batch->d_jk_prod_M, batch->d_nat_M, batch->d_nat_inv_M, batch->d_ws_M,   \
-      batch->d_jk_sums_pow_lower_M, batch->d_jk_sums_pow_upper_M, batch->d_rs, \
-      batch->d_fact_M, batch->d_fact_inv_M, batch->d_results, batch->p,        \
-      batch->p_dash, batch->r, batch->r3)
+      batch->d_vecs, (count), batch->ctx->d_ctx, batch->d_results)
 
 // Launch async GPU compute (non-blocking)
 void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
@@ -594,12 +686,13 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
     return;
 
   int block_size = 256;
+  size_t m = batch->ctx->m;
 
   cudaStream_t stream = batch->stream;
 
   // Async copy H2D for this sub-batch
   CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs, batch->h_vecs,
-                             batch->count * batch->m * sizeof(uint64_t),
+                             batch->count * m * sizeof(uint64_t),
                              cudaMemcpyHostToDevice, stream));
 
   int num_blocks = (batch->count + block_size - 1) / block_size;
@@ -609,7 +702,7 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
     LAUNCH_KERNEL(n, stream, batch->count);                                    \
     break;
 
-  switch (batch->m) {
+  switch (m) {
     LK(3);
     LK(5);
     LK(7);
@@ -623,7 +716,7 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
     LK(23);
     LK(25);
   default:
-    printf("\nm=%lu\n", batch->m);
+    printf("\nm=%lu\n", m);
     assert("unsupported m" && 0);
   }
 #undef LK
@@ -654,21 +747,8 @@ void vec_batch_free(vec_batch_t *batch) {
   CUDA_CHECK(cudaFreeHost(batch->h_vecs));
   CUDA_CHECK(cudaFreeHost(batch->h_results));
 
-  // Free device memory - matrix computation
+  // Free device memory - per-batch only
   CUDA_CHECK(cudaFree(batch->d_vecs));
-  CUDA_CHECK(cudaFree(batch->d_jk_prod_M));
-  CUDA_CHECK(cudaFree(batch->d_nat_M));
-  if (batch->d_nat_inv_M)
-    CUDA_CHECK(cudaFree(batch->d_nat_inv_M));
-
-  // Free device memory - full computation lookup tables
-  CUDA_CHECK(cudaFree(batch->d_ws_M));
-  CUDA_CHECK(cudaFree(batch->d_jk_sums_pow_lower_M));
-  CUDA_CHECK(cudaFree(batch->d_jk_sums_pow_upper_M));
-  CUDA_CHECK(cudaFree(batch->d_rs));
-  CUDA_CHECK(cudaFree(batch->d_fact_M));
-  CUDA_CHECK(cudaFree(batch->d_fact_inv_M));
-
   CUDA_CHECK(cudaFree(batch->d_results));
 
   free(batch);

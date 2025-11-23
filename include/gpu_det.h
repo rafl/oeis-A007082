@@ -14,22 +14,30 @@ bool gpu_available(void);
 // Get number of available GPUs
 int gpu_device_count(void);
 
-// Opaque batch structure
+// Opaque structures
+typedef struct gpu_context_t gpu_context_t;
 typedef struct vec_batch_t vec_batch_t;
 
 typedef void (*batch_cb_t)(void *);
 
-// === Vector-based API (builds matrices on GPU, much faster) ===
+// === GPU Context API (shared constant data) ===
 
-// Create a vector batch for processing coefficient vectors on GPU
-// Now includes all lookup tables for full computation
-vec_batch_t *vec_batch_new(
-    size_t max_vecs, uint64_t n, uint64_t n_args, uint64_t m, uint64_t p,
-    uint64_t p_dash, uint64_t r, uint64_t r3, const uint64_t *jk_prod_M,
-    const uint64_t *nat_M, const uint64_t *nat_inv_M, const uint64_t *ws_M,
+// Create GPU context with constant lookup tables (shared across batches)
+gpu_context_t *gpu_context_new(
+    uint64_t n, uint64_t n_args, uint64_t m, uint64_t p, uint64_t p_dash,
+    uint64_t r, uint64_t r3, const uint64_t *jk_prod_M, const uint64_t *nat_M,
+    const uint64_t *nat_inv_M, const uint64_t *ws_M,
     const uint64_t *jk_sums_pow_lower_M, const uint64_t *jk_sums_pow_upper_M,
     const uint64_t *rs, const uint64_t *fact_M, const uint64_t *fact_inv_M,
     size_t m_half, size_t n_rs, bool is_jack_mode);
+
+// Free GPU context
+void gpu_context_free(gpu_context_t *ctx);
+
+// === Vector Batch API ===
+
+// Create a vector batch that uses a shared GPU context
+vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs);
 
 // Add a coefficient vector to the batch
 size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
