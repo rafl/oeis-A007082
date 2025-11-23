@@ -574,6 +574,12 @@ size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec) {
   return idx;
 }
 
+void vec_batch_add_bulk(vec_batch_t *batch, const uint64_t *vecs, size_t count) {
+  assert(batch->count + count <= batch->max_vecs);
+  memcpy(&batch->h_vecs[batch->count * batch->m], vecs, count * batch->m * sizeof(uint64_t));
+  batch->count += count;
+}
+
 #define LAUNCH_KERNEL(M, stream, count)                                        \
   vec_full_kernel<M, (M + 1) / 2><<<num_blocks, block_size, 0, stream>>>(      \
       batch->d_vecs, (count), batch->n, batch->n_args, batch->is_jack_mode,    \

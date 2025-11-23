@@ -756,52 +756,21 @@ static void *residue_for_prime(void *ud) {
 // Controls how many full vectors are sent to GPU at once
 #define GPU_BATCH_SIZE (1UL << 15)
 
-// Helper: fill a single GPU batch from the prefix queue.
-// Returns true if any vectors were added, false if no more work.
-static bool gpu_fill_batch(worker_t *worker, int buf_idx, vec_batch_t *batch,
-                           size_t *full_vec_buf, size_t *n_vec_out,
-                           bool *queue_done, size_t *n_prefixes,
-                           size_t *prefix_idx, bool *iter_active,
-                           canon_iter_t *sub_iter, size_t *sub_scratch) {
-  const prim_ctx_t *ctx = worker->ctx;
-  size_t m = ctx->m;
-  size_t n_args = ctx->n_args;
-  size_t prefix_depth = worker->prefix_depth;
-  size_t *prefix_buf = worker->vecs;
-
-  vec_batch_clear(batch);
-  size_t n_vec = 0;
-
-  while (n_vec < GPU_BATCH_SIZE && !*queue_done) {
-    if (!*iter_active) {
-      if (*prefix_idx >= *n_prefixes) {
-        *n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);
-        *prefix_idx = 0;
-        if (*n_prefixes == 0) {
-          *queue_done = true;
-          break;
-        }
-      }
-
-      size_t *prefix = &prefix_buf[*prefix_idx * prefix_depth];
-      canon_iter_from_prefix(sub_iter, m, n_args, sub_scratch, prefix,
-                             prefix_depth);
-      *iter_active = true;
-    }
-
-    uint64_t *tgt = &full_vec_buf[n_vec * m];
-    if (canon_iter_next(sub_iter, tgt)) {
-      vec_batch_add(batch, tgt);
-      ++n_vec;
-    } else {
-      *iter_active = false;
-      ++*prefix_idx;
-    }
+// Count non-zero entries in a vector (determines its "class")
+static inline size_t count_nonzero(const uint64_t *vec, size_t m) {
+  size_t count = 0;
+  for (size_t i = 0; i < m; i++) {
+    if (vec[i] != 0)
+      count++;
   }
-
-  *n_vec_out = n_vec;
-  return n_vec > 0;
+  return count;
 }
+
+// Per-class accumulation buffer
+typedef struct {
+  uint64_t *vecs;  // accumulated vectors for this class
+  size_t n_vec;    // count of vectors accumulated
+} class_accum_t;
 
 // Helper: wait until a free batch slot is available and return its index.
 static int gpu_wait_for_free_batch(worker_t *worker, bool *batch_busy) {
@@ -816,6 +785,52 @@ static int gpu_wait_for_free_batch(worker_t *worker, bool *batch_busy) {
     // No free slot, wait until a callback frees one
     pthread_cond_wait(&worker->gpu_cv, &worker->gpu_mu);
   }
+}
+
+// Helper: send a class buffer to GPU
+static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
+                                  vec_batch_t **batches, uint64_t **full_vecs_buffers,
+                                  bool *batch_busy,
+                                  size_t *total_batches, size_t *total_vectors,
+                                  size_t *full_batches) {
+  if (accum->n_vec == 0)
+    return;
+
+  // Find a free batch slot
+  int buf_idx = gpu_wait_for_free_batch(worker, batch_busy);
+
+  // Swap buffers: give full accumulator to GPU, take empty GPU buffer for accumulator
+  vec_batch_t *batch = batches[buf_idx];
+  uint64_t *gpu_buf = accum->vecs;  // The full buffer goes to GPU
+  accum->vecs = full_vecs_buffers[buf_idx];  // Accumulator gets the empty buffer
+  full_vecs_buffers[buf_idx] = gpu_buf;  // GPU slot now points to full data
+
+  vec_batch_clear(batch);
+  vec_batch_add_bulk(batch, gpu_buf, accum->n_vec);
+
+  // Update statistics
+  (*total_batches)++;
+  (*total_vectors) += accum->n_vec;
+  if (accum->n_vec == GPU_BATCH_SIZE)
+    (*full_batches)++;
+
+  // Launch async GPU compute
+  gpu_batch_ctx_t *cb = (gpu_batch_ctx_t *)malloc(sizeof *cb);
+  cb->worker = worker;
+  cb->batch = batch;
+  cb->n_vec = accum->n_vec;
+  cb->buf_idx = buf_idx;
+  cb->batch_busy = batch_busy;
+
+  pthread_mutex_lock(&worker->gpu_mu);
+  batch_busy[buf_idx] = true;
+  worker->gpu_inflight++;
+  pthread_mutex_unlock(&worker->gpu_mu);
+
+  vec_batch_compute_async(batch, gpu_batch_done, cb);
+
+  // Reset accumulator
+  accum->n_vec = 0;
 }
 
 static void *residue_for_prime_gpu(void *ud) {
@@ -833,10 +848,9 @@ static void *residue_for_prime_gpu(void *ud) {
   // Calculate n_rs (same formula as in prim_ctx_new)
   size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
 
-  // Create 4 GPU batches for quad buffering with all lookup tables
-  // More buffers = more in-flight work = better GPU utilization
+  // Pool of GPU batches for sending to device
   vec_batch_t *batches[NUM_GPU_BUFFERS];
-  size_t *full_vecs_buffers[NUM_GPU_BUFFERS];
+  uint64_t *full_vecs_buffers[NUM_GPU_BUFFERS];
   bool batch_busy[NUM_GPU_BUFFERS];
 
   for (int i = 0; i < NUM_GPU_BUFFERS; i++) {
@@ -845,50 +859,84 @@ static void *residue_for_prime_gpu(void *ud) {
         ctx->r, ctx->r3, ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M, ctx->ws_M,
         ctx->jk_sums_pow_lower_M, ctx->jk_sums_pow_upper_M, ctx->rs,
         ctx->fact_M, ctx->fact_inv_M, ctx->m_half, n_rs, is_jack_mode);
-    full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(size_t));
+    full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(uint64_t));
     batch_busy[i] = false;
   }
 
+  // Per-class accumulation buffers (one per possible non-zero count: 0 to m)
+  size_t n_classes = m + 1;
+  class_accum_t *class_accums = malloc(n_classes * sizeof(class_accum_t));
+  for (size_t c = 0; c < n_classes; c++) {
+    class_accums[c].vecs = malloc(GPU_BATCH_SIZE * m * sizeof(uint64_t));
+    class_accums[c].n_vec = 0;
+  }
+
   size_t sub_scratch[m + 1];
+  size_t *prefix_buf = worker->vecs;
+  size_t prefix_depth = worker->prefix_depth;
+  size_t n_args = ctx->n_args;
 
-  bool queue_done = false;
-  size_t n_prefixes = 0, prefix_idx = 0;
-  bool iter_active = false; // Track if we have a partial iterator
-  canon_iter_t sub_iter;    // Persistent iterator across batches
+  // Batch statistics
+  size_t total_batches = 0;
+  size_t total_vectors = 0;
+  size_t full_batches = 0;
 
+  // Main loop: pull vectors and route to class buffers
   for (;;) {
-    // Find a free batch slot (or wait until one is freed by a callback)
-    int buf_idx = gpu_wait_for_free_batch(worker, batch_busy);
-
-    // Fill this batch with as many vectors as we can
-    size_t n_vec = 0;
-    bool has_work = gpu_fill_batch(worker, buf_idx, batches[buf_idx],
-                                   full_vecs_buffers[buf_idx], &n_vec,
-                                   &queue_done, &n_prefixes, &prefix_idx,
-                                   &iter_active, &sub_iter, sub_scratch);
-
-    if (!has_work) {
-      // No more CPU work to feed the GPU; stop launching new batches
+    size_t n_prefixes = queue_pop(worker->q, prefix_buf, w_idle, worker);
+    if (n_prefixes == 0)
       break;
+
+    for (size_t p_idx = 0; p_idx < n_prefixes; p_idx++) {
+      size_t *prefix = &prefix_buf[p_idx * prefix_depth];
+      canon_iter_t sub_iter;
+      canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,
+                             prefix_depth);
+
+      uint64_t vec[m];
+      while (canon_iter_next(&sub_iter, vec)) {
+        // Determine class and add to appropriate buffer
+        size_t vec_class = count_nonzero(vec, m);
+        class_accum_t *accum = &class_accums[vec_class];
+
+        // Copy vector to accumulator
+        memcpy(&accum->vecs[accum->n_vec * m], vec, m * sizeof(uint64_t));
+        accum->n_vec++;
+
+        // If buffer is full, send to GPU
+        if (accum->n_vec == GPU_BATCH_SIZE) {
+          gpu_send_class_buffer(worker, accum, batches, full_vecs_buffers,
+                                batch_busy, &total_batches, &total_vectors,
+                                &full_batches);
+        }
+      }
     }
+  }
 
-    // Launch async GPU compute on this batch; callback will accumulate results
-    gpu_batch_ctx_t *cb = (gpu_batch_ctx_t *)malloc(sizeof *cb);
-    cb->worker = worker;
-    cb->batch = batches[buf_idx];
-    cb->n_vec = n_vec;
-    cb->buf_idx = buf_idx;
-    cb->batch_busy = batch_busy;
-
-    pthread_mutex_lock(&worker->gpu_mu);
-    batch_busy[buf_idx] = true;
-    worker->gpu_inflight++;
-    pthread_mutex_unlock(&worker->gpu_mu);
-
-    vec_batch_compute_async(batches[buf_idx], gpu_batch_done, cb);
+  // Flush any remaining vectors in class buffers
+  for (size_t c = 0; c < n_classes; c++) {
+    if (class_accums[c].n_vec > 0) {
+      gpu_send_class_buffer(worker, &class_accums[c], batches, full_vecs_buffers,
+                            batch_busy, &total_batches, &total_vectors,
+                            &full_batches);
+    }
   }
 
   (void)w_idle(worker);
+
+  // Print batch statistics
+  if (total_batches > 0) {
+    double avg_size = (double)total_vectors / total_batches;
+    fprintf(stderr, "GPU batches: %zu total, %zu full (%.1f%%), avg size: %.1f / %zu (%.1f%%)\n",
+            total_batches, full_batches, 100.0 * full_batches / total_batches,
+            avg_size, (size_t)GPU_BATCH_SIZE, 100.0 * avg_size / GPU_BATCH_SIZE);
+  }
+
+  // Cleanup
+  for (size_t c = 0; c < n_classes; c++) {
+    free(class_accums[c].vecs);
+  }
+  free(class_accums);
 
   for (int i = 0; i < NUM_GPU_BUFFERS; i++) {
     vec_batch_free(batches[i]);
@@ -974,7 +1022,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   int n_gpus = use_gpu ? gpu_device_count() : 0;
   // With GPU: use fewer workers (2-3 per GPU) to reduce queue contention
   // Remaining threads will be producers
-  size_t n_workers = use_gpu ? ((size_t)n_gpus * 3) : st->n_thrds;
+  size_t n_workers = use_gpu ? ((size_t)n_gpus * 6) : st->n_thrds;
   void *(*worker_fn)(void *) =
       use_gpu ? residue_for_prime_gpu : residue_for_prime;
 #else
