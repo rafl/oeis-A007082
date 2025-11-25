@@ -404,11 +404,7 @@ vec_full_kernel(const uint64_t *vecs, size_t n_vecs,
       }
     }
 
-    // Compute final determinant
-    if (det != 0) {
-      det =
-          d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
-    }
+    det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
 
     f_snd_result = d_mont_mul(prod_M, det, p, p_dash);
   }
