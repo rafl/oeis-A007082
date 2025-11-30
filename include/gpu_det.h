@@ -1,5 +1,7 @@
 #pragma once
 
+#include "mss.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -40,10 +42,10 @@ void gpu_context_free(gpu_context_t *ctx);
 vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs);
 
 // Add a coefficient vector to the batch
-size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec);
+size_t vec_batch_add(vec_batch_t *batch, const mss_el_t *vec);
 
 // Add multiple coefficient vectors to the batch in bulk (more efficient)
-void vec_batch_add_bulk(vec_batch_t *batch, const uint64_t *vecs, size_t count);
+void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs, size_t count);
 
 // Launch async GPU compute (returns immediately)
 void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud);

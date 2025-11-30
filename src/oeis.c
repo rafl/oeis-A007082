@@ -86,7 +86,7 @@ int main(int argc, char **argv) {
     n = parse_uint(argv[optind]);
 
   source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool,
-                       size_t *) = source_process_new;
+                       mss_el_t *) = source_process_new;
   if (proc_mode == PROC_MODE_JACKBOTH)
     newproc = source_jack_new;
 

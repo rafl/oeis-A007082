@@ -5,13 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
+void canon_iter_new(canon_iter_t *it, size_t m, size_t tot, mss_el_t *scratch,
                     size_t depth) {
-  assert(depth >= 1 && depth <= m);
+  assert(depth >= 1 && depth <= m && tot < ((mss_el_t)-1));
   it->m = m;
   it->tot = tot;
   it->scratch = scratch;
-  memset(it->scratch, 0, (m + 1) * sizeof(size_t));
+  memset(it->scratch, 0, (m + 1) * sizeof(mss_el_t));
   it->scratch[0] = tot;
 
   it->t = 1; // position
@@ -32,11 +32,13 @@ size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len) {
          (uint64_t[]){it->t, it->p, it->sum, it->stage, it->depth,
                       it->start_depth},
          6 * sizeof(uint64_t));
-  memcpy(out + 6, it->scratch, (it->m + 1) * sizeof(uint64_t));
+  // write uint8s out as 64 bits. i don't wanna change the format again right now
+  for (size_t i = 0; i <= it->m; ++i)
+    out[6+i] = it->scratch[i];
   return n;
 }
 
-void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
+void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, mss_el_t *scratch,
                        const void *buf, size_t len) {
   assert(len >= (6 + m + 1) * sizeof(uint64_t));
   const uint64_t *in = buf;
@@ -49,7 +51,8 @@ void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
   it->depth = in[4];
   it->start_depth = in[5];
   it->scratch = scratch;
-  memcpy(it->scratch, in + 6, (m + 1) * sizeof(uint64_t));
+  for (size_t i = 0; i <= m; ++i)
+    it->scratch[i] = in[6+i];
 
   // Compute nonzero_count from restored scratch buffer
   it->nonzero_count = 0;
@@ -59,10 +62,10 @@ void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, size_t *scratch,
   }
 }
 
-bool canon_iter_next(canon_iter_t *it, size_t *vec) {
+bool canon_iter_next(canon_iter_t *it, mss_el_t *vec) {
   const size_t m = it->m;
   const size_t tot = it->tot;
-  size_t *a = it->scratch;
+  mss_el_t *a = it->scratch;
 
   for (;;) {
     switch (it->stage) {
@@ -71,13 +74,13 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
         it->stage = ITER_STAGE_BACKTRACK;
         if (it->depth == m) {
           if (m % it->p == 0 && it->sum == tot) {
-            memcpy(vec, a + 1, it->depth * sizeof(size_t));
+            memcpy(vec, a + 1, it->depth * sizeof(mss_el_t));
             return true;
           }
           break;
         }
         if (a[1] * (m - it->depth) >= (tot - it->sum)) {
-          memcpy(vec, a + 1, it->depth * sizeof(size_t));
+          memcpy(vec, a + 1, it->depth * sizeof(mss_el_t));
           return true;
         }
         break;
@@ -140,7 +143,7 @@ bool canon_iter_next(canon_iter_t *it, size_t *vec) {
 }
 
 void canon_iter_from_prefix(canon_iter_t *it, size_t m, size_t tot,
-                            size_t *scratch, const size_t *prefix,
+                            mss_el_t *scratch, const mss_el_t *prefix,
                             size_t prefix_depth) {
   assert(prefix_depth >= 1 && prefix_depth < m);
   it->m = m;
@@ -148,9 +151,9 @@ void canon_iter_from_prefix(canon_iter_t *it, size_t m, size_t tot,
   it->scratch = scratch;
 
   it->scratch[0] = prefix[0];
-  memcpy(it->scratch + 1, prefix, prefix_depth * sizeof(size_t));
+  memcpy(it->scratch + 1, prefix, prefix_depth * sizeof(mss_el_t));
   memset(it->scratch + prefix_depth + 1, 0,
-         (m - prefix_depth) * sizeof(size_t));
+         (m - prefix_depth) * sizeof(mss_el_t));
 
   it->sum = 0;
   it->nonzero_count = 0;

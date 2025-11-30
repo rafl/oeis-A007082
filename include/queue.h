@@ -15,7 +15,7 @@
 
 // (there is a "queue thread" that fills up the queue with more tasks)
 typedef struct {
-  size_t *scratch, *buf, *vecs;
+  mss_el_t *scratch, *buf, *vecs;
   size_t head, tail, cap, m, prefix_depth;
   _Atomic size_t fill;
   bool done, pause;
@@ -28,9 +28,9 @@ typedef void (*resume_cb_t)(void *);
 typedef resume_cb_t (*idle_cb_t)(void *);
 
 queue_t *queue_new(size_t n, size_t m, size_t prefix_depth, const void *iter_st,
-                   size_t st_len, size_t *vecs);
+                   size_t st_len, mss_el_t *vecs);
 void queue_free(queue_t *);
 void queue_fill(queue_t *);
-size_t queue_pop(queue_t *, size_t *, idle_cb_t, void *);
+size_t queue_pop(queue_t *, mss_el_t *, idle_cb_t, void *);
 
 size_t queue_save(queue_t *it, void *buf, size_t len);

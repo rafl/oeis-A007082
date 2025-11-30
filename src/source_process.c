@@ -21,8 +21,6 @@
 #define POW_CACHE_SPLIT 6
 #define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
 
-static uint64_t m_for(uint64_t n) { return 2 * ((n + 1) / 4) + 1; }
-
 typedef struct {
   uint64_t n, n_args, m,
       m_half, // = (m+1)/2 - used for some jk_sums_pow cache stuff - see
@@ -225,7 +223,7 @@ int64_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow) {
 }
 
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
-static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const size_t *ms,
+static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const mss_el_t *ms,
                                   size_t len) {
   const uint64_t p = ctx->p, p_dash = ctx->p_dash;
 
@@ -286,7 +284,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r3, p, p_dash), p, p_dash);
 }
 
-static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
+static uint64_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups
@@ -378,7 +376,7 @@ static uint64_t jack_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
 }
 
 // Multiplying through all the x_i*x_j^-1 + x_i^-1*x_j terms
-static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
+static uint64_t f_fst_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
 
   uint64_t e = 0;
@@ -422,12 +420,12 @@ static uint64_t f_fst_trm(uint64_t *c, const prim_ctx_t *ctx) {
   return acc;
 }
 
-static uint64_t jack_offset(uint64_t *vec, const prim_ctx_t *ctx) {
+static uint64_t jack_offset(mss_el_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p,
                   ctx->p_dash);
 }
 
-static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
+static uint64_t jack(mss_el_t *vec, const prim_ctx_t *ctx) {
   uint64_t const m = ctx->m, p = ctx->p;
   uint64_t ret = 0;
   uint64_t f_0 = jack_offset(vec, ctx);
@@ -458,7 +456,7 @@ static uint64_t jack(uint64_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(ret, ctx->nat_M[ctx->n - 1], ctx->p, ctx->p_dash);
 }
 
-static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
+static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   const uint64_t p = ctx->p, m = ctx->m;
 
   // active groups typ for "type" aka class / colour
@@ -561,12 +559,12 @@ static uint64_t f_snd_trm(uint64_t *c, const prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-static uint64_t f(uint64_t *vec, const prim_ctx_t *ctx) {
+static uint64_t f(mss_el_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_trm(vec, ctx), f_snd_trm(vec, ctx), ctx->p,
                   ctx->p_dash);
 }
 
-static uint64_t david(uint64_t *vec, const prim_ctx_t *ctx) {
+static uint64_t david(mss_el_t *vec, const prim_ctx_t *ctx) {
   uint64_t const m = ctx->m, p = ctx->p;
   uint64_t ret = 0, f_0 = f(vec, ctx);
   uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
@@ -608,8 +606,8 @@ typedef struct {
   uint64_t n_args; // Number of arguments `f` or (or `f_jack_offset`) takes
   uint64_t m;      /*w is the mth root of unity*/
   uint64_t *ps;    /* list of primes */
-  size_t idx /* withth prime*/, np /* number of primes*/,
-      *vecss /*Some buffers for vectors*/;
+  size_t idx /* withth prime*/, np /* number of primes*/;
+  mss_el_t *vecss /*Some buffers for vectors*/;
   bool quiet, snapshot,
       borrowed;   /*mode stuff - saving snapshots so you can restart*/
   size_t n_thrds; /*number of threads*/
@@ -620,11 +618,11 @@ typedef struct {
 #endif
 
 typedef struct {
-  uint64_t (*f)(uint64_t *, const prim_ctx_t *);
+  uint64_t (*f)(mss_el_t *, const prim_ctx_t *);
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
   queue_t *q;
-  size_t *vecs;
+  mss_el_t *vecs;
   uint64_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
@@ -709,17 +707,18 @@ static resume_cb_t w_idle(void *ud) {
 // thread function for doing work on the "maths stuff"
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
-  uint64_t (*f)(uint64_t *, const prim_ctx_t *) = worker->f;
+  uint64_t (*f)(mss_el_t *, const prim_ctx_t *) = worker->f;
   const prim_ctx_t *ctx = worker->ctx;
   uint64_t m = ctx->m, p = ctx->p,
            l_acc = 0; // l_acc is where we're going to accumulate the total
                       // residual from the stuff we pull from our work queue
-  size_t *prefix_buf = worker->vecs;
+  mss_el_t *prefix_buf = worker->vecs;
   size_t prefix_depth = worker->prefix_depth;
   size_t n_args = ctx->n_args;
   worker->l_acc = &l_acc;
 
-  size_t sub_scratch[m + 1], full_vec[m], necklace_count = 0;
+  mss_el_t sub_scratch[m + 1], full_vec[m];
+  size_t necklace_count = 0;
 
   for (;;) {
     size_t n_vec = queue_pop(worker->q, prefix_buf, w_idle, worker);
@@ -727,7 +726,7 @@ static void *residue_for_prime(void *ud) {
       break;
 
     for (size_t c = 0; c < n_vec; ++c) {
-      size_t *prefix = &prefix_buf[c * prefix_depth];
+      mss_el_t *prefix = &prefix_buf[c * prefix_depth];
 
       canon_iter_t sub_iter;
       canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,
@@ -758,7 +757,7 @@ static void *residue_for_prime(void *ud) {
 
 // Per-class accumulation buffer
 typedef struct {
-  uint64_t *vecs;  // accumulated vectors for this class
+  mss_el_t *vecs;  // accumulated vectors for this class
   size_t n_vec;    // count of vectors accumulated
 } class_accum_t;
 
@@ -783,7 +782,7 @@ typedef struct {
   class_accum_t *class_accums;
   size_t n_classes;
   vec_batch_t **batches;
-  uint64_t **full_vecs_buffers;
+  mss_el_t **full_vecs_buffers;
   bool *batch_busy;
 } gpu_idle_ctx_t;
 
@@ -795,7 +794,7 @@ static void gpu_w_resume(void *ud) {
 
 // Forward declaration
 static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
-                                  vec_batch_t **batches, uint64_t **full_vecs_buffers,
+                                  vec_batch_t **batches, mss_el_t **full_vecs_buffers,
                                   bool *batch_busy);
 
 // GPU worker idle callback: flush all class buffers before going idle
@@ -820,7 +819,7 @@ static resume_cb_t gpu_w_idle(void *ud) {
 
 // Helper: send a class buffer to GPU
 static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
-                                  vec_batch_t **batches, uint64_t **full_vecs_buffers,
+                                  vec_batch_t **batches, mss_el_t **full_vecs_buffers,
                                   bool *batch_busy) {
   if (accum->n_vec == 0)
     return;
@@ -830,7 +829,7 @@ static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
 
   // Swap buffers: give full accumulator to GPU, take empty GPU buffer for accumulator
   vec_batch_t *batch = batches[buf_idx];
-  uint64_t *gpu_buf = accum->vecs;  // The full buffer goes to GPU
+  mss_el_t *gpu_buf = accum->vecs;  // The full buffer goes to GPU
   accum->vecs = full_vecs_buffers[buf_idx];  // Accumulator gets the empty buffer
   full_vecs_buffers[buf_idx] = gpu_buf;  // GPU slot now points to full data
 
@@ -880,12 +879,12 @@ static void *residue_for_prime_gpu(void *ud) {
 
   // Pool of GPU batches for sending to device
   vec_batch_t *batches[NUM_GPU_BUFFERS];
-  uint64_t *full_vecs_buffers[NUM_GPU_BUFFERS];
+  mss_el_t *full_vecs_buffers[NUM_GPU_BUFFERS];
   bool batch_busy[NUM_GPU_BUFFERS];
 
   for (int i = 0; i < NUM_GPU_BUFFERS; i++) {
     batches[i] = vec_batch_new(gpu_ctx, GPU_BATCH_SIZE);
-    full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(uint64_t));
+    full_vecs_buffers[i] = malloc(GPU_BATCH_SIZE * m * sizeof(mss_el_t));
     batch_busy[i] = false;
   }
 
@@ -893,12 +892,12 @@ static void *residue_for_prime_gpu(void *ud) {
   size_t n_classes = m + 1;
   class_accum_t *class_accums = malloc(n_classes * sizeof(class_accum_t));
   for (size_t c = 0; c < n_classes; c++) {
-    class_accums[c].vecs = malloc(GPU_BATCH_SIZE * m * sizeof(uint64_t));
+    class_accums[c].vecs = malloc(GPU_BATCH_SIZE * m * sizeof(mss_el_t));
     class_accums[c].n_vec = 0;
   }
 
-  size_t sub_scratch[m + 1];
-  size_t *prefix_buf = worker->vecs;
+  mss_el_t sub_scratch[m + 1];
+  mss_el_t *prefix_buf = worker->vecs;
   size_t prefix_depth = worker->prefix_depth;
   size_t n_args = ctx->n_args;
 
@@ -919,19 +918,19 @@ static void *residue_for_prime_gpu(void *ud) {
       break;
 
     for (size_t p_idx = 0; p_idx < n_prefixes; p_idx++) {
-      size_t *prefix = &prefix_buf[p_idx * prefix_depth];
+      mss_el_t *prefix = &prefix_buf[p_idx * prefix_depth];
       canon_iter_t sub_iter;
       canon_iter_from_prefix(&sub_iter, m, n_args, sub_scratch, prefix,
                              prefix_depth);
 
-      uint64_t vec[m];
+      mss_el_t vec[m];
       while (canon_iter_next(&sub_iter, vec)) {
         // Determine class and add to appropriate buffer
         size_t vec_class = sub_iter.nonzero_count;
         class_accum_t *accum = &class_accums[vec_class];
 
         // Copy vector to accumulator
-        memcpy(&accum->vecs[accum->n_vec * m], vec, m * sizeof(uint64_t));
+        memcpy(&accum->vecs[accum->n_vec * m], vec, m * sizeof(mss_el_t));
         accum->n_vec++;
 
         // If buffer is full, send to GPU
@@ -1031,7 +1030,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   // make some threads
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
-  uint64_t (*fn)(uint64_t *, const prim_ctx_t *) =
+  uint64_t (*fn)(mss_el_t *, const prim_ctx_t *) =
       st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
 
 #ifdef USE_GPU
@@ -1094,7 +1093,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   return ret(st, ctx, acc, res, p_ret);
 }
 
-size_t *source_process_vecss(source_t *self) {
+mss_el_t *source_process_vecss(source_t *self) {
   proc_state_t *st = self->state;
   return st->vecss;
 }
@@ -1111,7 +1110,7 @@ static void proc_destroy(source_t *self) {
 #define P_STRIDE (1ULL << 10)
 
 source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
-                             bool quiet, bool snapshot, size_t *vecss) {
+                             bool quiet, bool snapshot, mss_el_t *vecss) {
   uint64_t m = m_for(n);
   assert(mode <= PROC_MODE_JACKEST);
   if (mode == PROC_MODE_JACKEST || mode == PROC_MODE_JACK_OFFSET) {
@@ -1133,7 +1132,7 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
   if (!vecss) {
     size_t worker_buf_size = CHUNK * m * n_thrds;
     size_t queue_buf_size = CHUNK * prefix_depth * (1 + Q_CAP);
-    vecss = malloc((worker_buf_size + queue_buf_size) * sizeof(size_t));
+    vecss = malloc((worker_buf_size + queue_buf_size) * sizeof(mss_el_t));
     assert(vecss);
   }
   *st = (proc_state_t){.mode = mode,

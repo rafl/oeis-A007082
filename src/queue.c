@@ -6,7 +6,7 @@
 #include <string.h>
 
 queue_t *queue_new(size_t n_args, size_t m, size_t prefix_depth,
-                   const void *iter_st, size_t st_len, size_t *vecs) {
+                   const void *iter_st, size_t st_len, mss_el_t *vecs) {
   queue_t *q = malloc(sizeof(queue_t));
   assert(q);
   q->head = q->tail = q->fill = 0;
@@ -18,7 +18,7 @@ queue_t *queue_new(size_t n_args, size_t m, size_t prefix_depth,
   pthread_cond_init(&q->not_empty, NULL);
   pthread_cond_init(&q->not_full, NULL);
   pthread_cond_init(&q->resume, NULL);
-  q->scratch = malloc((m + 1) * sizeof(size_t));
+  q->scratch = malloc((m + 1) * sizeof(mss_el_t));
   assert(q->scratch);
   if (st_len)
     canon_iter_resume(&q->it, m, n_args, q->scratch, iter_st, st_len);
@@ -39,7 +39,7 @@ void queue_free(queue_t *q) {
   free(q);
 }
 
-static inline void queue_push(queue_t *restrict q, const size_t *vecs,
+static inline void queue_push(queue_t *restrict q, const mss_el_t *vecs,
                               size_t n_vec) {
   size_t stride = q->prefix_depth;
   pthread_mutex_lock(&q->mu);
@@ -50,11 +50,11 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
   size_t spc = q->cap - q->tail;
   size_t fst = (n_vec <= spc) ? n_vec : spc;
 
-  memcpy(&q->buf[q->tail * stride], vecs, fst * stride * sizeof(size_t));
+  memcpy(&q->buf[q->tail * stride], vecs, fst * stride * sizeof(mss_el_t));
 
   if (fst < n_vec)
     memcpy(q->buf, &vecs[fst * stride],
-           (n_vec - fst) * stride * sizeof(size_t));
+           (n_vec - fst) * stride * sizeof(mss_el_t));
 
   q->tail = (q->tail + n_vec) % q->cap;
   q->fill += n_vec;
@@ -67,7 +67,7 @@ static inline void queue_push(queue_t *restrict q, const size_t *vecs,
   pthread_mutex_unlock(&q->mu);
 }
 
-size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
+size_t queue_pop(queue_t *q, mss_el_t *out, idle_cb_t onidle, void *ud) {
   size_t stride = q->prefix_depth;
   pthread_mutex_lock(&q->mu);
 
@@ -87,9 +87,9 @@ size_t queue_pop(queue_t *q, size_t *out, idle_cb_t onidle, void *ud) {
   size_t spc = q->cap - q->head;
   size_t fst = n_vec <= spc ? n_vec : spc;
 
-  memcpy(out, &q->buf[q->head * stride], fst * stride * sizeof(size_t));
+  memcpy(out, &q->buf[q->head * stride], fst * stride * sizeof(mss_el_t));
   if (fst < n_vec)
-    memcpy(out + fst * stride, q->buf, (n_vec - fst) * stride * sizeof(size_t));
+    memcpy(out + fst * stride, q->buf, (n_vec - fst) * stride * sizeof(mss_el_t));
 
   q->head = (q->head + n_vec) % q->cap;
   q->fill -= n_vec;

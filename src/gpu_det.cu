@@ -145,7 +145,7 @@ __device__ inline uint64_t d_jk_sums_pow(const uint64_t *d_jk_sums_pow_upper_M,
 template <size_t M>
 __device__ inline uint64_t
 d_multinomial_mod_p(const uint64_t *d_fact_M, const uint64_t *d_fact_inv_M,
-                    const uint64_t *vec, uint64_t n_args, uint64_t p,
+                    const mss_el_t *vec, uint64_t n_args, uint64_t p,
                     uint64_t p_dash) {
   uint64_t coeff = d_fact_M[n_args - 1];
   for (size_t i = 0; i < M; ++i) {
@@ -156,7 +156,7 @@ d_multinomial_mod_p(const uint64_t *d_fact_M, const uint64_t *d_fact_inv_M,
 
 // Device-side f_fst_trm computation
 template <size_t M, size_t M_HALF>
-__device__ inline uint64_t d_f_fst_trm(const uint64_t *vec,
+__device__ inline uint64_t d_f_fst_trm(const mss_el_t *vec,
                                        const uint64_t *d_rs,
                                        const uint64_t *d_jk_sums_pow_upper_M,
                                        const uint64_t *d_jk_sums_pow_lower_M,
@@ -197,7 +197,7 @@ __device__ inline uint64_t d_f_fst_trm(const uint64_t *vec,
 // Build matrix for f_snd_trm on GPU, return dimension and prod_M
 template <size_t M>
 __device__ size_t d_f_snd_trm_build_matrix(
-    const uint64_t *c, const uint64_t *jk_prod_M, const uint64_t *nat_M,
+    const mss_el_t *c, const uint64_t *jk_prod_M, const uint64_t *nat_M,
     const uint64_t *nat_inv_M, uint64_t *A, uint64_t *prod_M_out, uint64_t p,
     uint64_t p_dash, uint64_t r) {
   uint64_t typ[M];
@@ -259,7 +259,7 @@ __device__ size_t d_f_snd_trm_build_matrix(
 
 // Build matrix for jack_snd_trm on GPU
 template <size_t M>
-__device__ size_t d_jack_snd_trm_build_matrix(const uint64_t *c,
+__device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
                                               const uint64_t *jk_prod_M,
                                               const uint64_t *nat_M,
                                               uint64_t *A, uint64_t *prod_M_out,
@@ -318,7 +318,7 @@ __device__ size_t d_jack_snd_trm_build_matrix(const uint64_t *c,
 // Each thread processes one coefficient vector and produces final result
 template <size_t M, size_t M_HALF>
 __global__ void
-vec_full_kernel(const uint64_t *vecs, size_t n_vecs,
+vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
                 const gpu_kernel_ctx_t *ctx, uint64_t *results) {
   size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (vec_idx >= n_vecs)
@@ -343,7 +343,7 @@ vec_full_kernel(const uint64_t *vecs, size_t n_vecs,
   const uint64_t *d_fact_M = ctx->d_fact_M;
   const uint64_t *d_fact_inv_M = ctx->d_fact_inv_M;
 
-  const uint64_t *vec = &vecs[vec_idx * M];
+  const mss_el_t *vec = &vecs[vec_idx * M];
 
   // Step 1: Compute f_fst_trm
   uint64_t f_fst_result = d_f_fst_trm<M, M_HALF>(
@@ -511,11 +511,11 @@ struct gpu_context_t {
 // Per-batch data (multiple per worker for pipelining)
 struct vec_batch_t {
   // Host data (pinned for async transfers)
-  uint64_t *h_vecs;    // max_vecs * m
+  mss_el_t *h_vecs;    // max_vecs * m
   uint64_t *h_results; // max_vecs
 
   // Device data - per-batch only
-  uint64_t *d_vecs;
+  mss_el_t *d_vecs;
   uint64_t *d_results;
 
   // CUDA stream for pipelining
@@ -657,18 +657,18 @@ vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs) {
   return batch;
 }
 
-size_t vec_batch_add(vec_batch_t *batch, const uint64_t *vec) {
+size_t vec_batch_add(vec_batch_t *batch, const mss_el_t *vec) {
   assert(batch->count < batch->max_vecs);
   size_t idx = batch->count++;
   size_t m = batch->ctx->m;
-  memcpy(&batch->h_vecs[idx * m], vec, m * sizeof(uint64_t));
+  memcpy(&batch->h_vecs[idx * m], vec, m * sizeof(mss_el_t));
   return idx;
 }
 
-void vec_batch_add_bulk(vec_batch_t *batch, const uint64_t *vecs, size_t count) {
+void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs, size_t count) {
   assert(batch->count + count <= batch->max_vecs);
   size_t m = batch->ctx->m;
-  memcpy(&batch->h_vecs[batch->count * m], vecs, count * m * sizeof(uint64_t));
+  memcpy(&batch->h_vecs[batch->count * m], vecs, count * m * sizeof(mss_el_t));
   batch->count += count;
 }
 

@@ -37,7 +37,7 @@ static void proc_destroy(source_t *self) {
 }
 
 source_t *source_jack_new(process_mode_t, uint64_t n, uint64_t m_id, bool quiet,
-                          bool snapshot, size_t *vecss) {
+                          bool snapshot, mss_el_t *vecss) {
   assert(!vecss);
   source_t *off =
       source_process_new(PROC_MODE_JACK_OFFSET, n, m_id, quiet, snapshot, NULL);

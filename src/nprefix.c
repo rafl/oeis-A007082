@@ -54,7 +54,7 @@ int main(int argc, char **argv) {
     printf("n=%lu, m=%lu, depth=%lu\n\n", n, m, depth);
   }
 
-  size_t scratch[m + 1], vec[m];
+  mss_el_t scratch[m + 1], vec[m];
 
   canon_iter_t iter;
   canon_iter_new(&iter, m, n, scratch, depth);
@@ -70,7 +70,7 @@ int main(int argc, char **argv) {
     if (!quiet) {
       printf("[");
       for (size_t i = 0; i < depth; i++) {
-        printf("%zu", vec[i]);
+        printf("%u", vec[i]);
         if (i < depth - 1)
           printf(", ");
       }
@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     }
 
     if (depth < m) {
-      size_t sub_scratch[m + 1], sub_vec[m];
+      mss_el_t sub_scratch[m + 1], sub_vec[m];
       canon_iter_t sub_iter;
 
       canon_iter_from_prefix(&sub_iter, m, n, sub_scratch, vec, depth);
@@ -88,7 +88,7 @@ int main(int argc, char **argv) {
         if (!quiet) {
           printf("  [");
           for (size_t i = 0; i < m; i++) {
-            printf("%zu", sub_vec[i]);
+            printf("%u", sub_vec[i]);
             if (i < m - 1)
               printf(", ");
           }

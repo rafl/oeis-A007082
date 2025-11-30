@@ -1,6 +1,8 @@
 #pragma once
 
+#include "mss.h"
 #include "source.h"
+
 #include <stdbool.h>
 #include <stddef.h>
 
@@ -12,5 +14,5 @@ typedef enum {
 } process_mode_t;
 
 source_t *source_process_new(process_mode_t, uint64_t, uint64_t, bool, bool,
-                             size_t *);
-size_t *source_process_vecss(source_t *);
+                             mss_el_t *);
+mss_el_t *source_process_vecss(source_t *);

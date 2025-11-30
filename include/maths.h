@@ -130,3 +130,5 @@ inline uint64_t mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2, uint64_t b2,
   int64_t maybe = u - p;
   return maybe < 0 ? u : (uint64_t)maybe;
 }
+
+inline uint64_t m_for(uint64_t n) { return 2 * ((n + 1) / 4) + 1; }
