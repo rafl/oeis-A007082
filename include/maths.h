@@ -6,6 +6,10 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PRIME_BITS 31
 
 // mostly for debugging
@@ -13,8 +17,10 @@
 #define FLD_TYPE_BITS PRIME_BITS
 #endif
 
+#ifndef __cplusplus
 _Static_assert(PRIME_BITS < 64);
 _Static_assert(PRIME_BITS <= FLD_TYPE_BITS);
+#endif
 
 #if FLD_TYPE_BITS > 31
 typedef uint64_t fld_t;
@@ -171,3 +177,7 @@ inline fld_t mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
 }
 
 inline uint64_t m_for(uint64_t n) { return 2 * ((n + 1) / 4) + 1; }
+
+#ifdef __cplusplus
+}
+#endif

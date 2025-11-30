@@ -665,10 +665,10 @@ static void CUDART_CB gpu_batch_done(void *data) {
   size_t n_vec = ctx->n_vec;
 
   const prim_ctx_t *pctx = w->ctx;
-  uint64_t p = pctx->p;
+  fld_t p = pctx->p;
 
   // Accumulate this batch's results locally
-  uint64_t local_acc = 0;
+  fld_t local_acc = 0;
   for (size_t c = 0; c < n_vec; ++c) {
     uint64_t result = vec_batch_get(batch, c);
     local_acc = add_mod_u64(local_acc, result, p);
@@ -867,7 +867,8 @@ static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
 static void *residue_for_prime_gpu(void *ud) {
   worker_t *worker = ud;
   const prim_ctx_t *ctx = worker->ctx;
-  uint64_t m = ctx->m, l_acc = 0;
+  uint64_t m = ctx->m;
+  fld_t l_acc = 0;
   worker->l_acc = &l_acc;
 
   // Set GPU device for this worker

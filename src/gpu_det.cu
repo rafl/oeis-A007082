@@ -20,25 +20,23 @@
 #define POW_CACHE_SPLIT 6
 #define POW_CACHE_DIVISOR (1 << POW_CACHE_SPLIT)
 
-typedef unsigned __int128 uint128_t;
-
 // Device-side context struct - passed to kernel as single pointer
 struct gpu_kernel_ctx_t {
   // Device pointers to lookup tables
-  uint64_t *d_jk_prod_M;
-  uint64_t *d_nat_M;
-  uint64_t *d_nat_inv_M;
-  uint64_t *d_ws_M;
-  uint64_t *d_jk_sums_pow_lower_M;
-  uint64_t *d_jk_sums_pow_upper_M;
-  uint64_t *d_rs;
-  uint64_t *d_fact_M;
-  uint64_t *d_fact_inv_M;
+  fld_t *d_jk_prod_M;
+  fld_t *d_nat_M;
+  fld_t *d_nat_inv_M;
+  fld_t *d_ws_M;
+  fld_t *d_jk_sums_pow_lower_M;
+  fld_t *d_jk_sums_pow_upper_M;
+  fld_t *d_rs;
+  fld_t *d_fact_M;
+  fld_t *d_fact_inv_M;
 
   // Parameters
   uint64_t n;
   uint64_t n_args;
-  uint64_t p, p_dash, r, r3;
+  fld_t p, p_dash, r, r3;
   bool is_jack_mode;
 };
 
@@ -55,18 +53,18 @@ __device__ inline uint64_t d_add_mod(uint64_t x, uint64_t y, uint64_t p) {
 }
 
 // Device-side Montgomery arithmetic helpers
-__device__ inline uint64_t d_mont_mul(uint64_t a, uint64_t b, uint64_t p,
-                                      uint64_t p_dash) {
-  uint128_t t = (uint128_t)a * b;
-  uint64_t m = (uint64_t)t * p_dash;
-  uint128_t u = t + (uint128_t)m * p;
-  uint64_t res = u >> 64;
+__device__ inline fld_t d_mont_mul(fld_t a, fld_t b, fld_t p,
+                                      fld_t p_dash) {
+  dfld_t t = (dfld_t)a * b;
+  fld_t m = (fld_t)t * p_dash;
+  dfld_t u = t + (dfld_t)m * p;
+  uint64_t res = u >> FLD_BITS;
   int64_t maybe = res - p;
-  return maybe < 0 ? res : (uint64_t)maybe;
+  return maybe < 0 ? res : (fld_t)maybe;
 }
 
-__device__ inline uint64_t d_mont_pow(uint64_t b, uint64_t e, uint64_t acc,
-                                      uint64_t p, uint64_t p_dash) {
+__device__ inline fld_t d_mont_pow(fld_t b, uint64_t e, fld_t acc,
+                                      fld_t p, fld_t p_dash) {
   while (e) {
     if (e & 1)
       acc = d_mont_mul(acc, b, p, p_dash);
@@ -76,15 +74,15 @@ __device__ inline uint64_t d_mont_pow(uint64_t b, uint64_t e, uint64_t acc,
   return acc;
 }
 
-__device__ inline uint64_t d_extended_euclidean(uint64_t a, uint64_t b) {
-  uint64_t r0 = a;
-  uint64_t r1 = b;
-  uint64_t s0 = 1;
-  uint64_t s1 = 0;
-  uint64_t spare;
+__device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
+  fld_t r0 = a;
+  fld_t r1 = b;
+  fld_t s0 = 1;
+  fld_t s1 = 0;
+  fld_t spare;
   size_t n = 0;
   while (r1) {
-    uint64_t q = r0 / r1;
+    fld_t q = r0 / r1;
     spare = r0 % r1;
     r0 = r1;
     r1 = spare;
@@ -98,39 +96,42 @@ __device__ inline uint64_t d_extended_euclidean(uint64_t a, uint64_t b) {
   return s0;
 }
 
-__device__ inline uint64_t d_mont_inv(uint64_t x, uint64_t r3, uint64_t p,
-                                      uint64_t p_dash) {
-  uint64_t inv = d_extended_euclidean(x, p);
+__device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p,
+                                      fld_t p_dash) {
+  fld_t inv = d_extended_euclidean(x, p);
   return d_mont_mul(r3, inv, p, p_dash);
 }
 
-__device__ inline uint64_t d_mont_mul_sub(uint64_t a1, uint64_t b1, uint64_t a2,
-                                          uint64_t b2, uint64_t p,
-                                          uint64_t p_dash) {
-  uint128_t t1 = (uint128_t)a1 * b1;
-  uint128_t t2 = (uint128_t)a2 * b2;
-  uint128_t t = t1 + ((uint128_t)p << 64) - t2;
-  uint64_t m = (uint64_t)t * p_dash;
-  uint64_t u = (t + (uint128_t)m * p) >> 64;
-  int64_t maybe = u - p;
-  return maybe < 0 ? u : (uint64_t)maybe;
+__device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2,
+                                          fld_t b2, fld_t p,
+                                          fld_t p_dash) {
+  dfld_t t1 = (dfld_t)a1 * b1;
+  dfld_t t2 = (dfld_t)a2 * b2;
+  dfld_t t = t1 + ((dfld_t)p << FLD_BITS) - t2;
+  fld_t m = (fld_t)t * p_dash;
+  fld_t u = (t + (dfld_t)m * p) >> FLD_BITS;
+  if (u >= p) u -= p;
+  if (u >= p) u -= p;
+  assert(u < p);
+  return u;
 }
 
 // Device-side fast_pow_2 using rs cache
-__device__ inline uint64_t d_fast_pow_2(const uint64_t *d_rs, uint64_t pow,
-                                        uint64_t p, uint64_t p_dash) {
-  uint64_t r_pow = pow / 64;
-  uint64_t remain = pow % 64;
+__device__ inline fld_t d_fast_pow_2(const fld_t *d_rs, uint64_t pow,
+                                        fld_t p, fld_t p_dash) {
+  uint64_t r_pow = pow / FLD_BITS;
+  uint64_t remain = pow % FLD_BITS;
   uint64_t pow2 = 1UL << remain;
+// TODO: reduce?
   return d_mont_mul(pow2, d_rs[r_pow + 2], p, p_dash);
 }
 
 // Device-side jk_sums_pow using split power cache
 template <size_t M_HALF>
-__device__ inline uint64_t d_jk_sums_pow(const uint64_t *d_jk_sums_pow_upper_M,
-                                         const uint64_t *d_jk_sums_pow_lower_M,
-                                         uint64_t diff, uint64_t pow,
-                                         uint64_t p, uint64_t p_dash) {
+__device__ inline fld_t d_jk_sums_pow(const fld_t *d_jk_sums_pow_upper_M,
+                                         const fld_t *d_jk_sums_pow_lower_M,
+                                         fld_t diff, uint64_t pow,
+                                         fld_t p, fld_t p_dash) {
   uint64_t upper_index = pow >> POW_CACHE_SPLIT;
   uint64_t lower_index = pow & (POW_CACHE_DIVISOR - 1);
 
@@ -143,11 +144,11 @@ __device__ inline uint64_t d_jk_sums_pow(const uint64_t *d_jk_sums_pow_upper_M,
 
 // Device-side multinomial coefficient computation
 template <size_t M>
-__device__ inline uint64_t
-d_multinomial_mod_p(const uint64_t *d_fact_M, const uint64_t *d_fact_inv_M,
-                    const mss_el_t *vec, uint64_t n_args, uint64_t p,
-                    uint64_t p_dash) {
-  uint64_t coeff = d_fact_M[n_args - 1];
+__device__ inline fld_t
+d_multinomial_mod_p(const fld_t *d_fact_M, const fld_t *d_fact_inv_M,
+                    const mss_el_t *vec, uint64_t n_args, fld_t p,
+                    fld_t p_dash) {
+  fld_t coeff = d_fact_M[n_args - 1];
   for (size_t i = 0; i < M; ++i) {
     coeff = d_mont_mul(coeff, d_fact_inv_M[vec[i]], p, p_dash);
   }
@@ -156,11 +157,11 @@ d_multinomial_mod_p(const uint64_t *d_fact_M, const uint64_t *d_fact_inv_M,
 
 // Device-side f_fst_trm computation
 template <size_t M, size_t M_HALF>
-__device__ inline uint64_t d_f_fst_trm(const mss_el_t *vec,
-                                       const uint64_t *d_rs,
-                                       const uint64_t *d_jk_sums_pow_upper_M,
-                                       const uint64_t *d_jk_sums_pow_lower_M,
-                                       uint64_t p, uint64_t p_dash) {
+__device__ inline fld_t d_f_fst_trm(const mss_el_t *vec,
+                                       const fld_t *d_rs,
+                                       const fld_t *d_jk_sums_pow_upper_M,
+                                       const fld_t *d_jk_sums_pow_lower_M,
+                                       fld_t p, fld_t p_dash) {
   uint64_t e = 0;
   // assert(m <= M);
   uint64_t pows[M];
@@ -182,10 +183,10 @@ __device__ inline uint64_t d_f_fst_trm(const mss_el_t *vec,
     }
   }
 
-  uint64_t acc = d_fast_pow_2(d_rs, e / 2, p, p_dash);
+  fld_t acc = d_fast_pow_2(d_rs, e / 2, p, p_dash);
 
   for (size_t i = 1; i < M_HALF; i++) {
-    uint64_t pow_val =
+    fld_t pow_val =
         d_jk_sums_pow<M_HALF>(d_jk_sums_pow_upper_M, d_jk_sums_pow_lower_M, i,
                               pows[i] + pows[M - i], p, p_dash);
     acc = d_mont_mul(acc, pow_val, p, p_dash);
@@ -197,9 +198,9 @@ __device__ inline uint64_t d_f_fst_trm(const mss_el_t *vec,
 // Build matrix for f_snd_trm on GPU, return dimension and prod_M
 template <size_t M>
 __device__ size_t d_f_snd_trm_build_matrix(
-    const mss_el_t *c, const uint64_t *jk_prod_M, const uint64_t *nat_M,
-    const uint64_t *nat_inv_M, uint64_t *A, uint64_t *prod_M_out, uint64_t p,
-    uint64_t p_dash, uint64_t r) {
+    const mss_el_t *c, const fld_t *jk_prod_M, const fld_t *nat_M,
+    const fld_t *nat_inv_M, fld_t *A, fld_t *prod_M_out, fld_t p,
+    fld_t p_dash, fld_t r) {
   static_assert((uint8_t)-1 > M);
   uint8_t typ[M];
   size_t r_cnt = 0;
@@ -210,17 +211,17 @@ __device__ size_t d_f_snd_trm_build_matrix(
     }
   }
 
-  uint64_t prod_M = r;
+  fld_t prod_M = r;
 
   for (size_t a = 0; a < r_cnt; ++a) {
     uint8_t i = typ[a];
     if (c[i] == 1)
       continue;
 
-    uint64_t sum = 0;
+    fld_t sum = 0;
     for (size_t b = 0; b < r_cnt; ++b) {
       uint8_t j = typ[b];
-      uint64_t W = jk_prod_M[d_jk_pos<M>(i, j)];
+      fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], W, p, p_dash), p);
     }
 
@@ -237,16 +238,16 @@ __device__ size_t d_f_snd_trm_build_matrix(
 
   for (size_t a = 1; a < r_cnt; ++a) {
     uint8_t i = typ[a];
-    uint64_t W_del = jk_prod_M[M - i];
-    uint64_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
+    fld_t W_del = jk_prod_M[M - i];
+    fld_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
 
     for (size_t b = 1; b < r_cnt; ++b) {
       uint8_t j = typ[b];
       if (j == i)
         continue;
 
-      uint64_t W = jk_prod_M[d_jk_pos<M>(i, j)];
-      uint64_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
+      fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
+      fld_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
       A[(a - 1) * dim + (b - 1)] = p - v;
       diag = d_add_mod(diag, v, p);
     }
@@ -261,11 +262,11 @@ __device__ size_t d_f_snd_trm_build_matrix(
 // Build matrix for jack_snd_trm on GPU
 template <size_t M>
 __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
-                                              const uint64_t *jk_prod_M,
-                                              const uint64_t *nat_M,
-                                              uint64_t *A, uint64_t *prod_M_out,
-                                              uint64_t p, uint64_t p_dash,
-                                              uint64_t r) {
+                                              const fld_t *jk_prod_M,
+                                              const fld_t *nat_M,
+                                              fld_t *A, fld_t *prod_M_out,
+                                              fld_t p, fld_t p_dash,
+                                              fld_t r) {
   static_assert((uint8_t)-1 > M);
   uint8_t typ[M];
   size_t dim = 0;
@@ -276,14 +277,14 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
     }
   }
 
-  uint64_t prod_M = r;
+  fld_t prod_M = r;
 
   for (size_t a = 0; a < dim; ++a) {
     uint8_t i = typ[a];
-    uint64_t sum = r;
+    fld_t sum = r;
     for (size_t b = 0; b < dim; ++b) {
       uint8_t j = typ[b];
-      uint64_t w = jk_prod_M[d_jk_pos<M>(i, j)];
+      fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], w, p, p_dash), p);
     }
     prod_M = d_mont_pow(sum, c[i] - 1, prod_M, p, p_dash);
@@ -296,15 +297,15 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
 
   for (size_t a = 0; a < dim; ++a) {
     uint8_t i = typ[a];
-    uint64_t diag = r;
+    fld_t diag = r;
 
     for (size_t b = 0; b < dim; ++b) {
       uint8_t j = typ[b];
       if (j == i)
         continue;
 
-      uint64_t w = jk_prod_M[d_jk_pos<M>(i, j)];
-      uint64_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
+      fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
+      fld_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
       A[(a)*dim + (b)] = p - v;
       diag = d_add_mod(diag, v, p);
     }
@@ -335,25 +336,25 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
   const uint64_t n_args = ctx->n_args;
   const bool is_jack_mode = ctx->is_jack_mode;
 
-  const uint64_t *d_jk_prod_M = ctx->d_jk_prod_M;
-  const uint64_t *d_nat_M = ctx->d_nat_M;
-  const uint64_t *d_nat_inv_M = ctx->d_nat_inv_M;
-  const uint64_t *d_ws_M = ctx->d_ws_M;
-  const uint64_t *d_jk_sums_pow_lower_M = ctx->d_jk_sums_pow_lower_M;
-  const uint64_t *d_jk_sums_pow_upper_M = ctx->d_jk_sums_pow_upper_M;
-  const uint64_t *d_rs = ctx->d_rs;
-  const uint64_t *d_fact_M = ctx->d_fact_M;
-  const uint64_t *d_fact_inv_M = ctx->d_fact_inv_M;
+  const fld_t *d_jk_prod_M = ctx->d_jk_prod_M;
+  const fld_t *d_nat_M = ctx->d_nat_M;
+  const fld_t *d_nat_inv_M = ctx->d_nat_inv_M;
+  const fld_t *d_ws_M = ctx->d_ws_M;
+  const fld_t *d_jk_sums_pow_lower_M = ctx->d_jk_sums_pow_lower_M;
+  const fld_t *d_jk_sums_pow_upper_M = ctx->d_jk_sums_pow_upper_M;
+  const fld_t *d_rs = ctx->d_rs;
+  const fld_t *d_fact_M = ctx->d_fact_M;
+  const fld_t *d_fact_inv_M = ctx->d_fact_inv_M;
 
   const mss_el_t *vec = &vecs[vec_idx * M];
 
   // Step 1: Compute f_fst_trm
-  uint64_t f_fst_result = d_f_fst_trm<M, M_HALF>(
+  fld_t f_fst_result = d_f_fst_trm<M, M_HALF>(
       vec, d_rs, d_jk_sums_pow_upper_M, d_jk_sums_pow_lower_M, p, p_dash);
 
   // Step 2: Compute f_snd_trm (build matrix + compute determinant)
-  uint64_t A[M * M];
-  uint64_t prod_M;
+  fld_t A[M * M];
+  fld_t prod_M;
   size_t dim;
 
   if (is_jack_mode) {
@@ -369,7 +370,7 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
     f_snd_result = prod_M;
   } else {
     // Compute determinant via Gaussian elimination
-    uint64_t det = r, scaling_factor = r;
+    fld_t det = r, scaling_factor = r;
 
     for (size_t k = 0; k < dim; ++k) {
       // Find pivot
@@ -385,20 +386,20 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
       // Swap rows if needed
       if (pivot_i != k) {
         for (size_t j = 0; j < dim; ++j) {
-          uint64_t tmp = A[k * dim + j];
+          fld_t tmp = A[k * dim + j];
           A[k * dim + j] = A[pivot_i * dim + j];
           A[pivot_i * dim + j] = tmp;
         }
         det = p - det;
       }
 
-      uint64_t pivot = A[k * dim + k];
+      fld_t pivot = A[k * dim + k];
       det = d_mont_mul(det, pivot, p, p_dash);
 
       // Elimination
       for (size_t i = k + 1; i < dim; ++i) {
         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        uint64_t multiplier = A[i * dim + k];
+        fld_t multiplier = A[i * dim + k];
         for (size_t j = k; j < dim; ++j) {
           A[i * dim + j] = d_mont_mul_sub(A[i * dim + j], pivot, A[k * dim + j],
                                           multiplier, p, p_dash);
@@ -412,21 +413,21 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
   }
 
   // Step 3: Multiply f_fst_result and f_snd_result to get f_0
-  uint64_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
+  fld_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
 
   // Step 4: Compute multinomial coefficient
-  uint64_t coeff_baseline =
+  fld_t coeff_baseline =
       d_multinomial_mod_p<M>(d_fact_M, d_fact_inv_M, vec, n_args, p, p_dash);
 
   // Step 5: Loop over rotations (david or jack)
-  uint64_t ret = 0;
+  fld_t ret = 0;
   for (size_t r_idx = 0; r_idx < M; ++r_idx) {
     if (vec[r_idx] == 0)
       continue;
 
-    uint64_t coeff = d_mont_mul(coeff_baseline, d_nat_M[vec[r_idx]], p, p_dash);
+    fld_t coeff = d_mont_mul(coeff_baseline, d_nat_M[vec[r_idx]], p, p_dash);
 
-    uint64_t f_n;
+    fld_t f_n;
     if (is_jack_mode) {
       // Jack mode
       f_n = d_mont_mul(coeff, f_0, p, p_dash);
@@ -485,15 +486,15 @@ int gpu_device_count(void) {
 // Shared context for constant data (one per worker)
 struct gpu_context_t {
   // Device data - constant lookup tables
-  uint64_t *d_jk_prod_M;           // m
-  uint64_t *d_nat_M;               // n+1
-  uint64_t *d_nat_inv_M;           // n+1 (NULL for jack mode)
-  uint64_t *d_ws_M;                // m
-  uint64_t *d_jk_sums_pow_lower_M; // POW_CACHE_DIVISOR * m_half
-  uint64_t *d_jk_sums_pow_upper_M; // POW_CACHE_DIVISOR * m_half
-  uint64_t *d_rs;                  // n_rs
-  uint64_t *d_fact_M;              // n+1
-  uint64_t *d_fact_inv_M;          // n+1
+  fld_t *d_jk_prod_M;           // m
+  fld_t *d_nat_M;               // n+1
+  fld_t *d_nat_inv_M;           // n+1 (NULL for jack mode)
+  fld_t *d_ws_M;                // m
+  fld_t *d_jk_sums_pow_lower_M; // POW_CACHE_DIVISOR * m_half
+  fld_t *d_jk_sums_pow_upper_M; // POW_CACHE_DIVISOR * m_half
+  fld_t *d_rs;                  // n_rs
+  fld_t *d_fact_M;              // n+1
+  fld_t *d_fact_inv_M;          // n+1
 
   // Device-side kernel context (single struct with all pointers/params)
   gpu_kernel_ctx_t *d_ctx;
@@ -532,11 +533,11 @@ struct vec_batch_t {
 };
 
 gpu_context_t *gpu_context_new(
-    uint64_t n, uint64_t n_args, uint64_t m, uint64_t p, uint64_t p_dash,
-    uint64_t r, uint64_t r3, const uint64_t *jk_prod_M, const uint64_t *nat_M,
-    const uint64_t *nat_inv_M, const uint64_t *ws_M,
-    const uint64_t *jk_sums_pow_lower_M, const uint64_t *jk_sums_pow_upper_M,
-    const uint64_t *rs, const uint64_t *fact_M, const uint64_t *fact_inv_M,
+    uint64_t n, uint64_t n_args, uint64_t m, fld_t p, fld_t p_dash,
+    fld_t r, fld_t r3, const fld_t *jk_prod_M, const fld_t *nat_M,
+    const fld_t *nat_inv_M, const fld_t *ws_M,
+    const fld_t *jk_sums_pow_lower_M, const fld_t *jk_sums_pow_upper_M,
+    const fld_t *rs, const fld_t *fact_M, const fld_t *fact_inv_M,
     size_t m_half, size_t n_rs, bool is_jack_mode) {
   gpu_context_t *ctx = (gpu_context_t *)malloc(sizeof(gpu_context_t));
   assert(ctx);
@@ -553,45 +554,45 @@ gpu_context_t *gpu_context_new(
   ctx->is_jack_mode = is_jack_mode;
 
   // Allocate device memory for constant lookup tables
-  CUDA_CHECK(cudaMalloc(&ctx->d_jk_prod_M, m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&ctx->d_nat_M, (n + 1) * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_jk_prod_M, m * sizeof(fld_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_nat_M, (n + 1) * sizeof(fld_t)));
   if (!is_jack_mode) {
-    CUDA_CHECK(cudaMalloc(&ctx->d_nat_inv_M, (n + 1) * sizeof(uint64_t)));
+    CUDA_CHECK(cudaMalloc(&ctx->d_nat_inv_M, (n + 1) * sizeof(fld_t)));
   } else {
     ctx->d_nat_inv_M = NULL;
   }
-  CUDA_CHECK(cudaMalloc(&ctx->d_ws_M, m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_ws_M, m * sizeof(fld_t)));
   CUDA_CHECK(cudaMalloc(&ctx->d_jk_sums_pow_lower_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
+                        POW_CACHE_DIVISOR * m_half * sizeof(fld_t)));
   CUDA_CHECK(cudaMalloc(&ctx->d_jk_sums_pow_upper_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&ctx->d_rs, n_rs * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&ctx->d_fact_M, (n + 1) * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&ctx->d_fact_inv_M, (n + 1) * sizeof(uint64_t)));
+                        POW_CACHE_DIVISOR * m_half * sizeof(fld_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_rs, n_rs * sizeof(fld_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_fact_M, (n + 1) * sizeof(fld_t)));
+  CUDA_CHECK(cudaMalloc(&ctx->d_fact_inv_M, (n + 1) * sizeof(fld_t)));
 
   // Copy constant data to device
-  CUDA_CHECK(cudaMemcpy(ctx->d_jk_prod_M, jk_prod_M, m * sizeof(uint64_t),
+  CUDA_CHECK(cudaMemcpy(ctx->d_jk_prod_M, jk_prod_M, m * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(ctx->d_nat_M, nat_M, (n + 1) * sizeof(uint64_t),
+  CUDA_CHECK(cudaMemcpy(ctx->d_nat_M, nat_M, (n + 1) * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
   if (!is_jack_mode) {
     CUDA_CHECK(cudaMemcpy(ctx->d_nat_inv_M, nat_inv_M,
-                          (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
+                          (n + 1) * sizeof(fld_t), cudaMemcpyHostToDevice));
   }
-  CUDA_CHECK(cudaMemcpy(ctx->d_ws_M, ws_M, m * sizeof(uint64_t),
+  CUDA_CHECK(cudaMemcpy(ctx->d_ws_M, ws_M, m * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_jk_sums_pow_lower_M, jk_sums_pow_lower_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t),
+                        POW_CACHE_DIVISOR * m_half * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_jk_sums_pow_upper_M, jk_sums_pow_upper_M,
-                        POW_CACHE_DIVISOR * m_half * sizeof(uint64_t),
+                        POW_CACHE_DIVISOR * m_half * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(ctx->d_rs, rs, n_rs * sizeof(uint64_t),
+  CUDA_CHECK(cudaMemcpy(ctx->d_rs, rs, n_rs * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(ctx->d_fact_M, fact_M, (n + 1) * sizeof(uint64_t),
+  CUDA_CHECK(cudaMemcpy(ctx->d_fact_M, fact_M, (n + 1) * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_fact_inv_M, fact_inv_M,
-                        (n + 1) * sizeof(uint64_t), cudaMemcpyHostToDevice));
+                        (n + 1) * sizeof(fld_t), cudaMemcpyHostToDevice));
 
   // Create device-side kernel context struct
   gpu_kernel_ctx_t h_ctx = {

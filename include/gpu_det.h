@@ -1,5 +1,6 @@
 #pragma once
 
+#include "maths.h"
 #include "mss.h"
 
 #include <stdbool.h>
@@ -26,11 +27,11 @@ typedef void (*batch_cb_t)(void *);
 
 // Create GPU context with constant lookup tables (shared across batches)
 gpu_context_t *gpu_context_new(
-    uint64_t n, uint64_t n_args, uint64_t m, uint64_t p, uint64_t p_dash,
-    uint64_t r, uint64_t r3, const uint64_t *jk_prod_M, const uint64_t *nat_M,
-    const uint64_t *nat_inv_M, const uint64_t *ws_M,
-    const uint64_t *jk_sums_pow_lower_M, const uint64_t *jk_sums_pow_upper_M,
-    const uint64_t *rs, const uint64_t *fact_M, const uint64_t *fact_inv_M,
+    uint64_t n, uint64_t n_args, uint64_t m, fld_t p, fld_t p_dash,
+    fld_t r, fld_t r3, const fld_t *jk_prod_M, const fld_t *nat_M,
+    const fld_t *nat_inv_M, const fld_t *ws_M,
+    const fld_t *jk_sums_pow_lower_M, const fld_t *jk_sums_pow_upper_M,
+    const fld_t *rs, const fld_t *fact_M, const fld_t *fact_inv_M,
     size_t m_half, size_t n_rs, bool is_jack_mode);
 
 // Free GPU context
