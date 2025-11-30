@@ -23,9 +23,9 @@
 
 typedef struct {
   uint64_t n, n_args, m,
-      m_half, // = (m+1)/2 - used for some jk_sums_pow cache stuff - see
+      m_half; // = (m+1)/2 - used for some jk_sums_pow cache stuff - see
               // jk_sums_pow
-      p,      // n = number of veritcies //obvious
+  fld_t p,      // n = number of veritcies //obvious
       p_dash, r, r2, r3, // montgomery stuff, a _M suffix implies something is
                          // in montgomery form
       // r is the equivilent of `1` in montgomary space. Which means `r^2` is
@@ -53,9 +53,23 @@ static inline size_t jk_pos(size_t j, size_t k, uint64_t m) {
   return result >= 0 ? (uint64_t)result : result + m;
 }
 
+// Raising coputing power of 2 is easy. Just if we'd overflow 2^64
+// we need to modular divide down. 2^64 = r though. So we use a
+// cache for r^n for how many times we overflow 2^64, and then a
+// left shift for the rest.
+fld_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow) {
+  uint64_t r_pow = pow / FLD_BITS;
+  uint64_t remain = pow % FLD_BITS;
+  uint64_t pow2 = 1UL << remain;
+  // Reduce pow2 mod p since it might be >= p for smaller prime bit widths
+  fld_t pow2_mod = (fld_t)(pow2 % (uint64_t)ctx->p);
+
+  return mont_mul(pow2_mod, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
+}
+
 // shared over threads - not mutated
 static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
-                                uint64_t p, uint64_t w) {
+                                fld_t p, fld_t w) {
   prim_ctx_t *ctx = malloc(sizeof(prim_ctx_t));
   assert(ctx);
   ctx->n = n;
@@ -63,13 +77,13 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
   ctx->m = m;
   ctx->m_half = (ctx->m + 1) / 2;
   ctx->p = p;
-  ctx->p_dash = (uint64_t)(-inv64_u64(p));
-  ctx->r = ((uint128_t)1 << 64) % p;
+  ctx->p_dash = (fld_t)(-inv64_u64(p));
+  ctx->r = ((uint128_t)1 << FLD_BITS) % p;
   ctx->r2 = (uint128_t)ctx->r * ctx->r % p;
   ctx->r3 = (uint128_t)ctx->r2 * ctx->r % p;
 
-  size_t n_rs = (ctx->n_args * ctx->n_args + 63) / 64 + 3;
-  ctx->rs = malloc(sizeof(uint64_t) * n_rs);
+  size_t n_rs = (ctx->n_args * ctx->n_args + (FLD_BITS - 1)) / FLD_BITS + 3;
+  ctx->rs = malloc(sizeof(fld_t) * n_rs);
   assert(ctx->rs);
 
   assert((n_args < POW_CACHE_DIVISOR) && "n too big, increase POW_CACHE_SPLIT");
@@ -80,7 +94,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
   }
 
   // initialize roots of unity
-  ctx->ws_M = malloc(m * sizeof(uint64_t));
+  ctx->ws_M = malloc(m * sizeof(fld_t));
   assert(ctx->ws_M);
   ctx->ws_M[0] = ctx->r;
   ctx->ws_M[1] = mont_mul(w, ctx->r2, p, ctx->p_dash);
@@ -88,7 +102,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
     ctx->ws_M[i] = mont_mul(ctx->ws_M[i - 1], ctx->ws_M[1], p, ctx->p_dash);
 
   // w^j * w^-k lookup - not actually inserted into the context
-  uint64_t jk_pairs_M[m * m];
+  fld_t jk_pairs_M[m * m];
   for (size_t j = 0; j < m; ++j) {
     for (size_t k = 0; k < m; ++k)
       jk_pairs_M[jk_pos(j, k, m)] =
@@ -96,7 +110,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
   }
 
   // cache of // w^-j*w^k + w^j*w^-k
-  uint64_t jk_sums_M[m];
+  fld_t jk_sums_M[m];
   for (size_t k = 0; k < m; ++k) {
     jk_sums_M[jk_pos(0, k, m)] = add_mod_u64(jk_pairs_M[jk_pos(0, k, m)],
                                              jk_pairs_M[jk_pos(k, 0, m)], p);
@@ -104,10 +118,10 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
 
   // see jk_sums_pow
   ctx->jk_sums_pow_lower_M =
-      malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
+      malloc(sizeof(fld_t) * POW_CACHE_DIVISOR * ctx->m_half);
   assert(ctx->jk_sums_pow_lower_M);
   ctx->jk_sums_pow_upper_M =
-      malloc(sizeof(uint64_t) * POW_CACHE_DIVISOR * ctx->m_half);
+      malloc(sizeof(fld_t) * POW_CACHE_DIVISOR * ctx->m_half);
   assert(ctx->jk_sums_pow_upper_M);
 
   for (size_t j = 0; j < ctx->m_half; j++) {
@@ -132,30 +146,30 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
   }
 
   // cache of w^j*w^-k / (w^-j*w^k + w^j*w^-k)
-  ctx->jk_prod_M = malloc(m * sizeof(uint64_t));
+  ctx->jk_prod_M = malloc(m * sizeof(fld_t));
   assert(ctx->jk_prod_M);
 
   for (size_t k = 0; k < m; ++k) {
     size_t pos = jk_pos(0, k, m);
-    uint64_t sum_inv = mont_inv(jk_sums_M[pos], ctx->r3, p, ctx->p_dash);
+    fld_t sum_inv = mont_inv(jk_sums_M[pos], ctx->r3, p, ctx->p_dash);
     ctx->jk_prod_M[pos] = mont_mul(jk_pairs_M[pos], sum_inv, p, ctx->p_dash);
   }
 
   // 1 to n
-  ctx->nat_M = malloc((n + 1) * sizeof(uint64_t));
+  ctx->nat_M = malloc((n + 1) * sizeof(fld_t));
   assert(ctx->nat_M);
   for (size_t i = 0; i <= n; ++i)
-    ctx->nat_M[i] = mont_mul(i, ctx->r2, p, ctx->p_dash);
+    ctx->nat_M[i] = mont_mul((fld_t)i, ctx->r2, p, ctx->p_dash);
 
   // 1/i for i = 1 to n
-  ctx->nat_inv_M = malloc((n + 1) * sizeof(uint64_t));
+  ctx->nat_inv_M = malloc((n + 1) * sizeof(fld_t));
   assert(ctx->nat_inv_M);
   ctx->nat_inv_M[0] = 0;
   for (size_t k = 1; k <= n; ++k)
     ctx->nat_inv_M[k] = mont_inv(ctx->nat_M[k], ctx->r3, p, ctx->p_dash);
 
   // i! for i = 1 to n+1
-  ctx->fact_M = malloc((n + 1) * sizeof(uint64_t));
+  ctx->fact_M = malloc((n + 1) * sizeof(fld_t));
   assert(ctx->fact_M);
   ctx->fact_M[0] = ctx->r;
   for (size_t i = 1; i < n + 1; ++i)
@@ -163,7 +177,7 @@ static prim_ctx_t *prim_ctx_new(uint64_t n, uint64_t n_args, uint64_t m,
         mont_mul(ctx->fact_M[i - 1], ctx->nat_M[i], p, ctx->p_dash);
 
   // 1/i! for i = 1 to n+1
-  ctx->fact_inv_M = malloc((n + 1) * sizeof(uint64_t));
+  ctx->fact_inv_M = malloc((n + 1) * sizeof(fld_t));
   assert(ctx->fact_inv_M);
   ctx->fact_inv_M[n] = mont_inv(ctx->fact_M[n], ctx->r3, p, ctx->p_dash);
   for (size_t i = n; i; --i)
@@ -186,18 +200,6 @@ static void prim_ctx_free(prim_ctx_t *ctx) {
   free(ctx);
 }
 
-// Raising coputing power of 2 is easy. Just if we'd overflow 2^64
-// we need to modular divide down. 2^64 = r though. So we use a
-// cache for r^n for how many times we overflow 2^64, and then a
-// left shift for the rest.
-uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow) {
-  uint64_t r_pow = pow / 64;
-  uint64_t remain = pow % 64;
-  uint64_t pow2 = 1UL << remain;
-
-  return mont_mul(pow2, ctx->rs[r_pow + 2], ctx->p, ctx->p_dash);
-}
-
 // Note that w^i + w^-i = w^-i + w^i
 // So there's only actually (m+1)/2 unique values for w^-i + w^i which lets us
 // shrink our cache size in half. The "diff" value is the index into this cache
@@ -210,7 +212,7 @@ uint64_t fast_pow_2(const prim_ctx_t *ctx, uint64_t pow) {
 // two parts. A cache of jk_sums^i for i < POW_CACHE_DIVISOR and a cache of
 // (jk_sums^POW_CACHE_DIVISOR)^i We can then do two cache lookups and a single
 // multiply
-int64_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow) {
+fld_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow) {
   uint64_t upper_index = pow >> POW_CACHE_SPLIT;
   uint64_t lower_index = pow & (POW_CACHE_DIVISOR - 1);
 
@@ -223,11 +225,11 @@ int64_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow) {
 }
 
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
-static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const mss_el_t *ms,
+static fld_t multinomial_mod_p(const prim_ctx_t *ctx, const mss_el_t *ms,
                                   size_t len) {
-  const uint64_t p = ctx->p, p_dash = ctx->p_dash;
+  const fld_t p = ctx->p, p_dash = ctx->p_dash;
 
-  uint64_t coeff = ctx->fact_M[ctx->n_args - 1];
+  fld_t coeff = ctx->fact_M[ctx->n_args - 1];
   for (size_t i = 0; i < len; ++i)
     coeff = mont_mul(coeff, ctx->fact_inv_M[ms[i]], p, p_dash);
 
@@ -236,9 +238,9 @@ static uint64_t multinomial_mod_p(const prim_ctx_t *ctx, const mss_el_t *ms,
 
 // Compute the determinant via gaussian elimination
 // we cary the denominator through and only compute a single inverse at the end
-static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
-  const uint64_t p = ctx->p, p_dash = ctx->p_dash;
-  uint64_t det = ctx->r, scaling_factor = ctx->r;
+static fld_t det_mod_p(fld_t *A, size_t dim, const prim_ctx_t *ctx) {
+  const fld_t p = ctx->p, p_dash = ctx->p_dash;
+  fld_t det = ctx->r, scaling_factor = ctx->r;
 
   for (size_t k = 0; k < dim; ++k) {
     size_t pivot_i = k;
@@ -256,14 +258,14 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
     if (pivot_i != k) {
       // We swap the rows over so that we have a non zero el on the diagonal
       for (size_t j = 0; j < dim; ++j) {
-        uint64_t tmp = A[k * dim + j];
+        fld_t tmp = A[k * dim + j];
         A[k * dim + j] = A[pivot_i * dim + j];
         A[pivot_i * dim + j] = tmp;
       }
       det = p - det; // And flip the sign of the determinant
     }
 
-    uint64_t pivot = A[k * dim + k];
+    fld_t pivot = A[k * dim + k];
     // multiply in our value on diagonal
     det = mont_mul(det, pivot, p, p_dash);
 
@@ -273,7 +275,7 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
       // factor scaling factor is where we record the product of thse numbers so
       // we can divide though by at the end to compensate
       scaling_factor = mont_mul(scaling_factor, pivot, p, p_dash);
-      uint64_t multiplier = A[i * dim + k];
+      fld_t multiplier = A[i * dim + k];
       for (size_t j = k; j < dim; ++j)
         // mul and subtract off the rest
         A[i * dim + j] = mont_mul_sub(A[i * dim + j], pivot, A[k * dim + j],
@@ -284,8 +286,9 @@ static uint64_t det_mod_p(uint64_t *A, size_t dim, const prim_ctx_t *ctx) {
   return mont_mul(det, mont_inv(scaling_factor, ctx->r3, p, p_dash), p, p_dash);
 }
 
-static uint64_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
-  const uint64_t p = ctx->p, m = ctx->m;
+static fld_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
+  const fld_t p = ctx->p;
+  const uint64_t m = ctx->m;
 
   // active groups
   // This is the indexs of the non zero elements of c
@@ -299,20 +302,20 @@ static uint64_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
     }
   }
 
-  uint64_t prod_M = ctx->r;
+  fld_t prod_M = ctx->r;
 
   // for each non zero power of omega w^i in our args
   for (size_t a = 0; a < r; ++a) {
     size_t i = typ[a];
 
     // Jack wants to add 1 to the diagonal
-    uint64_t sum = ctx->r;
+    fld_t sum = ctx->r;
     // for each non zero power of omega w^j in our args
     for (size_t b = 0; b < r; ++b) {
       size_t j = typ[b];
 
       // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k)
-      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      fld_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // sum is gunna be our diagonal element for this row / the row sum
       sum = add_mod_u64(sum, mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash), p);
@@ -332,18 +335,18 @@ static uint64_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
     return prod_M;
 
   // We're constructing the minor of the reduced matrix
-  uint64_t A[r * r];
+  fld_t A[r * r];
   for (size_t a = 0; a < r; ++a) {
     // looking t the w^i args
     size_t i = typ[a];
 
     // look up w^j*w^-k / (w^-j*w^k + w^j*w^-k) for i, 0...
 
-    // uint64_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
+    // fld_t W_del = ctx->jk_prod_M[jk_pos(i, 0, m)];
 
     // we're taking the multiplicity of 1 * this term
     // Jack wants this to start at 1 again
-    uint64_t diag = ctx->r; // mont_mul(ctx->nat_M[c[0]], W_del, p,
+    fld_t diag = ctx->r; // mont_mul(ctx->nat_M[c[0]], W_del, p,
                             // ctx->p_dash);
 
     // remaining off-diagonal blocks
@@ -356,10 +359,10 @@ static uint64_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
 
       // we're we're treading the 1 term as special... yeah ok I guess it's
       // because it doesn't go in the matrix? so this is the new "w del"
-      uint64_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
+      fld_t w = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // Again fill the matrix as per it's normal terms but with multiplicity
-      uint64_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
+      fld_t v = mont_mul(ctx->nat_M[c[j]], w, p, ctx->p_dash);
 
       // This is the -1 coefficient on the off diag elements
       A[(a)*r + (b)] = p - v;
@@ -371,13 +374,13 @@ static uint64_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   }
 
   // I guess prod_M is some magic compensation coefficient
-  uint64_t ret = mont_mul(prod_M, det_mod_p(A, r, ctx), p, ctx->p_dash);
-  return ret;
+  return mont_mul(prod_M, det_mod_p(A, r, ctx), p, ctx->p_dash);
 }
 
 // Multiplying through all the x_i*x_j^-1 + x_i^-1*x_j terms
-static uint64_t f_fst_trm(mss_el_t *c, const prim_ctx_t *ctx) {
-  const uint64_t m = ctx->m, p = ctx->p, p_dash = ctx->p_dash;
+static fld_t f_fst_trm(mss_el_t *c, const prim_ctx_t *ctx) {
+  const uint64_t m = ctx->m;
+  const fld_t p = ctx->p, p_dash = ctx->p_dash;
 
   uint64_t e = 0;
   // Now we go throug the cases where x_i != x_j
@@ -407,12 +410,12 @@ static uint64_t f_fst_trm(mss_el_t *c, const prim_ctx_t *ctx) {
     }
   }
 
-  uint64_t acc = fast_pow_2(ctx, e / 2);
+  fld_t acc = fast_pow_2(ctx, e / 2);
 
   // actually the (w^0 + w^-0 term) was already accounted for earier
   // so the i=0 term is always zero and we can skip it
   for (size_t i = 1; i < ctx->m_half; i++) {
-    uint64_t pow_val = jk_sums_pow(ctx, i, pows[i] + pows[m - i]);
+    fld_t pow_val = jk_sums_pow(ctx, i, pows[i] + pows[m - i]);
 
     acc = mont_mul(acc, pow_val, p, p_dash);
   }
@@ -420,16 +423,17 @@ static uint64_t f_fst_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   return acc;
 }
 
-static uint64_t jack_offset(mss_el_t *vec, const prim_ctx_t *ctx) {
+static fld_t jack_offset(mss_el_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_trm(vec, ctx), jack_snd_trm(vec, ctx), ctx->p,
                   ctx->p_dash);
 }
 
-static uint64_t jack(mss_el_t *vec, const prim_ctx_t *ctx) {
-  uint64_t const m = ctx->m, p = ctx->p;
-  uint64_t ret = 0;
-  uint64_t f_0 = jack_offset(vec, ctx);
-  uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+static fld_t jack(mss_el_t *vec, const prim_ctx_t *ctx) {
+  uint64_t const m = ctx->m;
+  const fld_t p = ctx->p;
+  fld_t ret = 0;
+  fld_t f_0 = jack_offset(vec, ctx);
+  fld_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
 
   // Loop over each "rotation" of the vector of argument multiplicities. This is
   // equivilent to multiplying all the coefficients by w
@@ -445,8 +449,8 @@ static uint64_t jack(mss_el_t *vec, const prim_ctx_t *ctx) {
     // "1" which requires us to subtract 1 from the first multiplicity. Rather
     // than recompute the full coeff each time we can take a baseline
     // "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
-    size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
-    uint64_t f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
+    fld_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+    fld_t f_n = mont_mul(coeff, f_0, p, ctx->p_dash);
     ret = add_mod_u64(ret, f_n, p);
   }
 
@@ -456,8 +460,9 @@ static uint64_t jack(mss_el_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(ret, ctx->nat_M[ctx->n - 1], ctx->p, ctx->p_dash);
 }
 
-static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
-  const uint64_t p = ctx->p, m = ctx->m;
+static fld_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
+  const fld_t p = ctx->p;
+  const uint64_t m = ctx->m;
 
   // active groups typ for "type" aka class / colour
   // This is the indexes of the non zero elements of c
@@ -470,7 +475,7 @@ static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
     }
   }
 
-  uint64_t prod_M = ctx->r;
+  fld_t prod_M = ctx->r;
 
   // for each i where w^i has non zero multiplicity in our args
   for (size_t a = 0; a < r; ++a) {
@@ -482,7 +487,7 @@ static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
     // This is similar to row sum of the off diagonal term in the full matrix
     // The off diagonal term would have one subtracted from multiplicity when j
     // = i (as there's no edge E_ii)
-    uint64_t sum = 0;
+    fld_t sum = 0;
 
     // for each j where w^j has non zero multiplicity in our args
     for (size_t b = 0; b < r; ++b) {
@@ -490,7 +495,7 @@ static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
 
       // This is the inner element of A matrix from the paper (up to sign) /
       // inner element of product sum in paper
-      uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
+      fld_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // sum += W * multiplicity of (w^j)
 
@@ -519,19 +524,19 @@ static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   // first row / col is the one being dropped the one corresponding to the w^0 =
   // 1 argument
 
-  uint64_t A[dim * dim];
+  fld_t A[dim * dim];
   // for each i!=0 where w^i has non zero multiplicity in our args
   for (size_t a = 1; a < r; ++a) {
     size_t i = typ[a];
 
     // contribution from the column removed to form the minor (that's a consant
     // 1 - so w^0 )
-    uint64_t W_del = ctx->jk_prod_M[m - i];
+    fld_t W_del = ctx->jk_prod_M[m - i];
 
     // When making the "laplaican" the diagonal is the sum of all off-diagonal
     // elements in the row of the full matrix including the column dropped to
     // form the minor. So we add that to the diag here (with multiplicity)
-    uint64_t diag = mont_mul(ctx->nat_M[c[0]], W_del, p, ctx->p_dash);
+    fld_t diag = mont_mul(ctx->nat_M[c[0]], W_del, p, ctx->p_dash);
 
     // for each j !=0 where w^j has non zero multiplicity in our args
     for (size_t b = 1; b < r; ++b) {
@@ -539,10 +544,10 @@ static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
       if (j == i)
         continue;
 
-      uint64_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
+      fld_t W = ctx->jk_prod_M[jk_pos(i, j, m)];
 
       // Could do a lookup here
-      uint64_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
+      fld_t v = mont_mul(ctx->nat_M[c[j]], W, p, ctx->p_dash);
 
       // This is the -1 coefficient on the off diag elements
 
@@ -559,15 +564,16 @@ static uint64_t f_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
   return mont_mul(prod_M, det_mod_p(A, dim, ctx), p, ctx->p_dash);
 }
 
-static uint64_t f(mss_el_t *vec, const prim_ctx_t *ctx) {
+static fld_t f(mss_el_t *vec, const prim_ctx_t *ctx) {
   return mont_mul(f_fst_trm(vec, ctx), f_snd_trm(vec, ctx), ctx->p,
                   ctx->p_dash);
 }
 
-static uint64_t david(mss_el_t *vec, const prim_ctx_t *ctx) {
-  uint64_t const m = ctx->m, p = ctx->p;
-  uint64_t ret = 0, f_0 = f(vec, ctx);
-  uint64_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
+static fld_t david(mss_el_t *vec, const prim_ctx_t *ctx) {
+  uint64_t const m = ctx->m;
+  const fld_t p = ctx->p;
+  fld_t ret = 0, f_0 = f(vec, ctx);
+  fld_t const coeff_baseline = multinomial_mod_p(ctx, vec, m);
 
   // Loop over each "rotation" of the vector of argument multiplicities. This is
   // equivilent to multiplying all the coefficients by w
@@ -583,13 +589,13 @@ static uint64_t david(mss_el_t *vec, const prim_ctx_t *ctx) {
     // "1" which requires us to subtract 1 from the first multiplicity. Rather
     // than recompute the full coeff each time we can take a baseline
     // "coefficient" and multiply it by j to convert 1/j! to 1/(j-1!)
-    size_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
+    fld_t coeff = mont_mul(coeff_baseline, ctx->nat_M[vec[r]], p, ctx->p_dash);
 
     size_t idx = (2 * r) % m;
     // f_0 = coeff * f_0 * w^(m-idx) = coeff * f_0 * w^-2r
     // This result comes from having to permute one of the ones from one of the
     // first n-1 args into the nth arg See the paper for more info
-    uint64_t f_n = mont_mul(
+    fld_t f_n = mont_mul(
         coeff, mont_mul(f_0, ctx->ws_M[idx ? m - idx : 0], p, ctx->p_dash), p,
         ctx->p_dash);
 
@@ -605,7 +611,7 @@ typedef struct {
   uint64_t n;      /* element of seq */
   uint64_t n_args; // Number of arguments `f` or (or `f_jack_offset`) takes
   uint64_t m;      /*w is the mth root of unity*/
-  uint64_t *ps;    /* list of primes */
+  fld_t *ps;       /* list of primes */
   size_t idx /* withth prime*/, np /* number of primes*/;
   mss_el_t *vecss /*Some buffers for vectors*/;
   bool quiet, snapshot,
@@ -618,12 +624,12 @@ typedef struct {
 #endif
 
 typedef struct {
-  uint64_t (*f)(mss_el_t *, const prim_ctx_t *);
+  fld_t (*f)(mss_el_t *, const prim_ctx_t *);
   _Atomic size_t *done;
   const prim_ctx_t *ctx;
   queue_t *q;
   mss_el_t *vecs;
-  uint64_t *l_acc, *acc;
+  fld_t *l_acc, *acc;
   pthread_mutex_t *acc_mu;
   bool idle;
   size_t prefix_depth;
@@ -707,11 +713,12 @@ static resume_cb_t w_idle(void *ud) {
 // thread function for doing work on the "maths stuff"
 static void *residue_for_prime(void *ud) {
   worker_t *worker = ud;
-  uint64_t (*f)(mss_el_t *, const prim_ctx_t *) = worker->f;
+  fld_t (*f)(mss_el_t *, const prim_ctx_t *) = worker->f;
   const prim_ctx_t *ctx = worker->ctx;
-  uint64_t m = ctx->m, p = ctx->p,
-           l_acc = 0; // l_acc is where we're going to accumulate the total
-                      // residual from the stuff we pull from our work queue
+  uint64_t m = ctx->m;
+  fld_t p = ctx->p,
+        l_acc = 0; // l_acc is where we're going to accumulate the total
+                   // residual from the stuff we pull from our work queue
   mss_el_t *prefix_buf = worker->vecs;
   size_t prefix_depth = worker->prefix_depth;
   size_t n_args = ctx->n_args;
@@ -978,13 +985,12 @@ static size_t get_num_threads() {
   return n > 0 ? (size_t)n : 1;
 }
 
-static int ret(proc_state_t *st, prim_ctx_t *ctx, uint64_t acc, uint64_t *res,
+static int ret(proc_state_t *st, prim_ctx_t *ctx, fld_t acc, uint64_t *res,
                uint64_t *p_ret) {
-  uint64_t denom = mont_inv(mont_pow(ctx->nat_M[ctx->m], ctx->n_args - 1,
-                                     ctx->r, ctx->p, ctx->p_dash),
-                            ctx->r3, ctx->p, ctx->p_dash);
-  uint64_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p,
-                          ctx->p_dash);
+  fld_t m_pow = mont_pow(ctx->nat_M[ctx->m], ctx->n_args - 1, ctx->r, ctx->p, ctx->p_dash);
+  fld_t denom = mont_inv(m_pow, ctx->r3, ctx->p, ctx->p_dash);
+  fld_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p,
+                       ctx->p_dash);
   prim_ctx_free(ctx);
 
   *p_ret = st->ps[st->idx++];
@@ -999,15 +1005,16 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
     return 0;
 
   // n, m, prime
-  uint64_t n = st->n, m = st->m, p = st->ps[st->idx];
+  uint64_t n = st->n, m = st->m;
+  fld_t p = st->ps[st->idx];
   // root of unity
-  uint64_t w = mth_root_mod_p(p, m);
+  fld_t w = mth_root_mod_p(p, m);
   prim_ctx_t *ctx = prim_ctx_new(n, st->n_args, m, p, w);
 
   const size_t siz = canon_iter_size(m, st->n_args);
 
   _Atomic size_t done = 0;
-  uint64_t acc = 0;
+  fld_t acc = 0;
 
   uint64_t iter_st[m + 7]; // 6 base fields + (m+1) scratch = m+7 total
   size_t st_len = 0;
@@ -1032,7 +1039,7 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
 
   // make some threads
   pthread_mutex_t acc_mu = PTHREAD_MUTEX_INITIALIZER;
-  uint64_t (*fn)(mss_el_t *, const prim_ctx_t *) =
+  fld_t (*fn)(mss_el_t *, const prim_ctx_t *) =
       st->mode == PROC_MODE_JACK_OFFSET ? jack : david;
 
 #ifdef USE_GPU
@@ -1124,7 +1131,7 @@ source_t *source_process_new(process_mode_t mode, uint64_t n, uint64_t m_id,
   uint64_t n_args = (mode == PROC_MODE_JACK_OFFSET) ? n - 2 : n;
   size_t np;
   assert(m_id < P_STRIDE);
-  uint64_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
+  fld_t *ps = build_prime_list(n, m, m_id, P_STRIDE, &np);
 
   proc_state_t *st = malloc(sizeof(*st));
   assert(st);

@@ -7,8 +7,6 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define PRIME_BITS 63
-
 static int factor_u64(uint64_t m, uint64_t *pf, DEBUG_ARG size_t pfs,
                       size_t *pcnt) {
   size_t k = 0;
@@ -28,11 +26,11 @@ static int factor_u64(uint64_t m, uint64_t *pf, DEBUG_ARG size_t pfs,
   return 0;
 }
 
-uint64_t prime_congruent_1_mod_m(uint64_t start, uint64_t m) {
+fld_t prime_congruent_1_mod_m(fld_t start, uint64_t m) {
   mpz_t z;
   mpz_init(z);
 
-  uint64_t p = start + (m - (start % m) + 1) % m;
+  fld_t p = start + (m - (start % m) + 1) % m;
 
   while (1) {
     mpz_set_ui(z, p);
@@ -44,7 +42,7 @@ uint64_t prime_congruent_1_mod_m(uint64_t start, uint64_t m) {
   }
 }
 
-uint64_t mth_root_mod_p(uint64_t p, uint64_t m) {
+fld_t mth_root_mod_p(fld_t p, uint64_t m) {
   uint64_t phi = p - 1;
   assert(!(phi % m));
 
@@ -53,11 +51,11 @@ uint64_t mth_root_mod_p(uint64_t p, uint64_t m) {
   factor_u64(m, pf, sizeof(pf) / sizeof(pf[0]), &k);
 
   uint64_t e = phi / m;
-  for (uint64_t g = 2;; ++g) {
+  for (fld_t g = 2;; ++g) {
     if (pow_mod_u64(g, phi, p) != 1)
       continue;
 
-    uint64_t cand = pow_mod_u64(g, e, p);
+    fld_t cand = pow_mod_u64(g, e, p);
     if (cand == 1)
       continue;
 
@@ -82,14 +80,14 @@ static size_t primes_needed(uint64_t n) {
   return (bits + PRIME_BITS - 1) / PRIME_BITS;
 }
 
-uint64_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t stride,
-                           size_t *out_np) {
+fld_t *build_prime_list(uint64_t n, uint64_t m, uint64_t m_id, size_t stride,
+                        size_t *out_np) {
   size_t np = primes_needed(n);
-  uint64_t *ps = malloc(np * sizeof(*ps));
+  fld_t *ps = malloc(np * sizeof(*ps));
   assert(ps);
 
   uint64_t stride_m = stride * m;
-  uint64_t p_base =
+  fld_t p_base =
       1ULL + m * (((1ULL << (PRIME_BITS - 1)) + m - 2) / m) + m_id * stride_m;
   for (size_t i = 0; i < np; ++i) {
     ps[i] = prime_congruent_1_mod_m(p_base, m);

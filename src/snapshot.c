@@ -47,7 +47,7 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
 
   int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
   if (fd < 0) {
-    printf("\nfailed to snapshot (open) %zu %" PRIu64 "\n", idx, *st->acc);
+    printf("\nfailed to snapshot (open) %zu %" FLD_FMT "\n", idx, *st->acc);
     return;
   };
 
@@ -56,13 +56,13 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
       queue_save(st->q, iter_st, (6 + st->q->m + 1) * sizeof(uint64_t));
   uint64_t data[3] = {idx, *st->acc, st_len};
   if (write(fd, &data, sizeof(data)) != 3 * sizeof(uint64_t)) {
-    printf("\nfailed to snapshot (write) %zu %" PRIu64 "\n", idx, *st->acc);
+    printf("\nfailed to snapshot (write) %zu %" FLD_FMT "\n", idx, *st->acc);
     close(fd);
     unlink(tmp);
     return;
   }
   if (write(fd, iter_st, st_len) != (int)st_len) {
-    printf("\nfailed to snapshot (write iter) %zu %" PRIu64 "\n", idx,
+    printf("\nfailed to snapshot (write iter) %zu %" FLD_FMT "\n", idx,
            *st->acc);
     close(fd);
     unlink(tmp);
@@ -130,7 +130,7 @@ static void *snapshot(void *ud) {
 
 void snapshot_start(snapshot_t *ss, process_mode_t mode, uint64_t n, uint64_t p,
                     size_t n_thrds, queue_t *q, bool **paused,
-                    _Atomic size_t *idx, uint64_t *acc) {
+                    _Atomic size_t *idx, fld_t *acc) {
   snapshot_st_t *st = &ss->st;
   *st = (snapshot_st_t){.mode = mode,
                         .n = n,
@@ -165,7 +165,7 @@ void snapshot_stop(snapshot_t *restrict ss) {
 }
 
 void snapshot_try_resume(process_mode_t mode, uint64_t n, uint64_t p,
-                         _Atomic size_t *done, uint64_t *acc, void *iter_st,
+                         _Atomic size_t *done, fld_t *acc, void *iter_st,
                          size_t *st_len) {
   char path[PATH_MAX];
   get_snapshot_path(mode, n, p, path, sizeof(path));

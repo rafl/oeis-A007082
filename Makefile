@@ -1,6 +1,7 @@
 DEBUG := 1
 SLOW_DIVISION := 0
 USE_GPU := 0
+FLD_TYPE_BITS :=
 
 -include .config
 
@@ -14,6 +15,10 @@ endif
 CFLAGS := -g -std=gnu18 -O3 -march=native $(LTO_FLAGS) -Wall -Wextra \
           $(shell pkg-config gmp --cflags) -Iinclude -MMD -MP \
           -DDEBUG=$(DEBUG) -DSLOW_DIVISION=$(SLOW_DIVISION)
+
+ifneq ($(FLD_TYPE_BITS),)
+CFLAGS += -DFLD_TYPE_BITS=$(FLD_TYPE_BITS)
+endif
 LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
 # GPU settings
