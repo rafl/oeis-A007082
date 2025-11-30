@@ -757,8 +757,8 @@ static void *residue_for_prime(void *ud) {
 
 // Per-class accumulation buffer
 typedef struct {
-  mss_el_t *vecs;  // accumulated vectors for this class
-  size_t n_vec;    // count of vectors accumulated
+  mss_el_t *vecs; // accumulated vectors for this class
+  size_t n_vec;   // count of vectors accumulated
 } class_accum_t;
 
 // Helper: wait until a free batch slot is available and return its index.
@@ -794,7 +794,8 @@ static void gpu_w_resume(void *ud) {
 
 // Forward declaration
 static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
-                                  vec_batch_t **batches, mss_el_t **full_vecs_buffers,
+                                  vec_batch_t **batches,
+                                  mss_el_t **full_vecs_buffers,
                                   bool *batch_busy);
 
 // GPU worker idle callback: flush all class buffers before going idle
@@ -804,9 +805,8 @@ static resume_cb_t gpu_w_idle(void *ud) {
   // Flush all class buffers before going idle
   for (size_t c = 0; c < ctx->n_classes; c++) {
     if (ctx->class_accums[c].n_vec > 0) {
-      gpu_send_class_buffer(ctx->worker, &ctx->class_accums[c],
-                            ctx->batches, ctx->full_vecs_buffers,
-                            ctx->batch_busy);
+      gpu_send_class_buffer(ctx->worker, &ctx->class_accums[c], ctx->batches,
+                            ctx->full_vecs_buffers, ctx->batch_busy);
     }
   }
 
@@ -819,7 +819,8 @@ static resume_cb_t gpu_w_idle(void *ud) {
 
 // Helper: send a class buffer to GPU
 static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
-                                  vec_batch_t **batches, mss_el_t **full_vecs_buffers,
+                                  vec_batch_t **batches,
+                                  mss_el_t **full_vecs_buffers,
                                   bool *batch_busy) {
   if (accum->n_vec == 0)
     return;
@@ -827,11 +828,12 @@ static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
   // Find a free batch slot
   int buf_idx = gpu_wait_for_free_batch(worker, batch_busy);
 
-  // Swap buffers: give full accumulator to GPU, take empty GPU buffer for accumulator
+  // Swap buffers: give full accumulator to GPU, take empty GPU buffer for
+  // accumulator
   vec_batch_t *batch = batches[buf_idx];
-  mss_el_t *gpu_buf = accum->vecs;  // The full buffer goes to GPU
-  accum->vecs = full_vecs_buffers[buf_idx];  // Accumulator gets the empty buffer
-  full_vecs_buffers[buf_idx] = gpu_buf;  // GPU slot now points to full data
+  mss_el_t *gpu_buf = accum->vecs;          // The full buffer goes to GPU
+  accum->vecs = full_vecs_buffers[buf_idx]; // Accumulator gets the empty buffer
+  full_vecs_buffers[buf_idx] = gpu_buf;     // GPU slot now points to full data
 
   vec_batch_clear(batch);
   vec_batch_add_bulk(batch, gpu_buf, accum->n_vec);
@@ -874,8 +876,8 @@ static void *residue_for_prime_gpu(void *ud) {
   gpu_context_t *gpu_ctx = gpu_context_new(
       ctx->n, ctx->n_args, ctx->m, ctx->p, ctx->p_dash, ctx->r, ctx->r3,
       ctx->jk_prod_M, ctx->nat_M, ctx->nat_inv_M, ctx->ws_M,
-      ctx->jk_sums_pow_lower_M, ctx->jk_sums_pow_upper_M, ctx->rs,
-      ctx->fact_M, ctx->fact_inv_M, ctx->m_half, n_rs, is_jack_mode);
+      ctx->jk_sums_pow_lower_M, ctx->jk_sums_pow_upper_M, ctx->rs, ctx->fact_M,
+      ctx->fact_inv_M, ctx->m_half, n_rs, is_jack_mode);
 
   // Pool of GPU batches for sending to device
   vec_batch_t *batches[NUM_GPU_BUFFERS];
@@ -903,12 +905,12 @@ static void *residue_for_prime_gpu(void *ud) {
 
   // Context for idle callback that flushes buffers
   gpu_idle_ctx_t idle_ctx = {
-    .worker = worker,
-    .class_accums = class_accums,
-    .n_classes = n_classes,
-    .batches = batches,
-    .full_vecs_buffers = full_vecs_buffers,
-    .batch_busy = batch_busy,
+      .worker = worker,
+      .class_accums = class_accums,
+      .n_classes = n_classes,
+      .batches = batches,
+      .full_vecs_buffers = full_vecs_buffers,
+      .batch_busy = batch_busy,
   };
 
   // Main loop: pull vectors and route to class buffers

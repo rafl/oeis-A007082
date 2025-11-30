@@ -317,9 +317,9 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
 // Comprehensive kernel: computes full david() or jack() result on GPU
 // Each thread processes one coefficient vector and produces final result
 template <size_t M, size_t M_HALF>
-__global__ void
-vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
-                const gpu_kernel_ctx_t *ctx, uint64_t *results) {
+__global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
+                                const gpu_kernel_ctx_t *ctx,
+                                uint64_t *results) {
   size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (vec_idx >= n_vecs)
     return;
@@ -645,7 +645,8 @@ vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs) {
   batch->count = 0;
 
   // Allocate pinned host memory for faster async transfers
-  CUDA_CHECK(cudaMallocHost(&batch->h_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
+  CUDA_CHECK(
+      cudaMallocHost(&batch->h_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
   CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(uint64_t)));
 
   CUDA_CHECK(cudaStreamCreate(&batch->stream));
@@ -665,7 +666,8 @@ size_t vec_batch_add(vec_batch_t *batch, const mss_el_t *vec) {
   return idx;
 }
 
-void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs, size_t count) {
+void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs,
+                        size_t count) {
   assert(batch->count + count <= batch->max_vecs);
   size_t m = batch->ctx->m;
   memcpy(&batch->h_vecs[batch->count * m], vecs, count * m * sizeof(mss_el_t));

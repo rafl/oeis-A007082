@@ -17,27 +17,28 @@
 #endif
 
 #include <dirent.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <errno.h>
+#include <unistd.h>
 
 // Global for cleanup
 static char g_temp_dir[256] = {0};
 
 // Test configuration
-#define TEST_N 25        // n value (small but exercises GPU)
-#define TEST_M_ID 0      // m_id (prime stride index)
+#define TEST_N 25   // n value (small but exercises GPU)
+#define TEST_M_ID 0 // m_id (prime stride index)
 
 // Run computation and return result for first prime
 // Returns result in *out, returns 1 on success, 0 on failure
 static int run_computation(uint64_t n, uint64_t m_id, bool snapshot,
                            uint64_t *out, uint64_t *prime_out) {
-  source_t *src = source_process_new(PROC_MODE_REG, n, m_id, true, snapshot, NULL);
+  source_t *src =
+      source_process_new(PROC_MODE_REG, n, m_id, true, snapshot, NULL);
   if (!src) {
     fprintf(stderr, "Failed to create source\n");
     return 0;
@@ -49,12 +50,12 @@ static int run_computation(uint64_t n, uint64_t m_id, bool snapshot,
 
   if (ok) {
     *out = result;
-    if (prime_out) *prime_out = prime;
+    if (prime_out)
+      *prime_out = prime;
     return 1;
   }
   return 0;
 }
-
 
 // Build snapshot path prefix for globbing
 static void get_snapshot_prefix(uint64_t n, uint64_t p, char *buf, size_t len) {
@@ -76,7 +77,8 @@ static int *find_snapshot_numbers(uint64_t n, uint64_t p, int *count) {
   // First pass: count files
   *count = 0;
   DIR *dir = opendir(".");
-  if (!dir) return NULL;
+  if (!dir)
+    return NULL;
 
   struct dirent *ent;
   while ((ent = readdir(dir)) != NULL) {
@@ -109,10 +111,12 @@ static int *find_snapshot_numbers(uint64_t n, uint64_t p, int *count) {
 
 // Remove temp directory and all contents
 static void cleanup_temp_dir(void) {
-  if (g_temp_dir[0] == '\0') return;
+  if (g_temp_dir[0] == '\0')
+    return;
 
   DIR *dir = opendir(g_temp_dir);
-  if (!dir) return;
+  if (!dir)
+    return;
 
   struct dirent *ent;
   char path[512];
@@ -133,7 +137,8 @@ static int setup_temp_dir(void) {
            (int)getpid(), (long)time(NULL));
 
   if (mkdir(g_temp_dir, 0755) != 0) {
-    fprintf(stderr, "Failed to create temp dir %s: %s\n", g_temp_dir, strerror(errno));
+    fprintf(stderr, "Failed to create temp dir %s: %s\n", g_temp_dir,
+            strerror(errno));
     g_temp_dir[0] = '\0';
     return 0;
   }
@@ -151,12 +156,14 @@ static int setup_temp_dir(void) {
 // Copy a numbered snapshot to the base snapshot file for resume
 static int setup_resume_snapshot(uint64_t n, uint64_t p, int num) {
   char src_path[256], dst_path[256];
-  snprintf(src_path, sizeof(src_path), ".%" PRIu64 ".%" PRIu64 ".ss.%d", n, p, num);
+  snprintf(src_path, sizeof(src_path), ".%" PRIu64 ".%" PRIu64 ".ss.%d", n, p,
+           num);
   snprintf(dst_path, sizeof(dst_path), ".%" PRIu64 ".%" PRIu64 ".ss", n, p);
 
   // Copy file
   FILE *src = fopen(src_path, "rb");
-  if (!src) return 0;
+  if (!src)
+    return 0;
 
   FILE *dst = fopen(dst_path, "wb");
   if (!dst) {
@@ -248,8 +255,8 @@ int main(int argc, char **argv) {
     }
 
     if (resumed != expected) {
-      printf("FAIL snapshot %d: got %" PRIu64 ", expected %" PRIu64 "\n",
-             num, resumed, expected);
+      printf("FAIL snapshot %d: got %" PRIu64 ", expected %" PRIu64 "\n", num,
+             resumed, expected);
       free(snapshot_nums);
       cleanup_temp_dir();
       return 1;

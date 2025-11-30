@@ -38,8 +38,8 @@ static void snapshot_save(snapshot_st_t *st, size_t idx) {
   char *multi = getenv("SNAPSHOT_MULTI");
   if (multi && multi[0] == '1') {
     int num = atomic_fetch_add(&snapshot_counter, 1);
-    snprintf(path, sizeof(path), ".%" PRIu64 ".%" PRIu64 "%s.ss.%d",
-             st->n, st->p, infix[st->mode], num);
+    snprintf(path, sizeof(path), ".%" PRIu64 ".%" PRIu64 "%s.ss.%d", st->n,
+             st->p, infix[st->mode], num);
   } else {
     get_snapshot_path(st->mode, st->n, st->p, path, sizeof(path));
   }

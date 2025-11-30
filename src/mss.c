@@ -32,14 +32,15 @@ size_t canon_iter_save(canon_iter_t *it, void *buf, size_t len) {
          (uint64_t[]){it->t, it->p, it->sum, it->stage, it->depth,
                       it->start_depth},
          6 * sizeof(uint64_t));
-  // write uint8s out as 64 bits. i don't wanna change the format again right now
+  // write uint8s out as 64 bits. i don't wanna change the format again right
+  // now
   for (size_t i = 0; i <= it->m; ++i)
-    out[6+i] = it->scratch[i];
+    out[6 + i] = it->scratch[i];
   return n;
 }
 
-void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, mss_el_t *scratch,
-                       const void *buf, size_t len) {
+void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot,
+                       mss_el_t *scratch, const void *buf, size_t len) {
   assert(len >= (6 + m + 1) * sizeof(uint64_t));
   const uint64_t *in = buf;
   it->m = m;
@@ -52,7 +53,7 @@ void canon_iter_resume(canon_iter_t *it, size_t m, size_t tot, mss_el_t *scratch
   it->start_depth = in[5];
   it->scratch = scratch;
   for (size_t i = 0; i <= m; ++i)
-    it->scratch[i] = in[6+i];
+    it->scratch[i] = in[6 + i];
 
   // Compute nonzero_count from restored scratch buffer
   it->nonzero_count = 0;

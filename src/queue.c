@@ -89,7 +89,8 @@ size_t queue_pop(queue_t *q, mss_el_t *out, idle_cb_t onidle, void *ud) {
 
   memcpy(out, &q->buf[q->head * stride], fst * stride * sizeof(mss_el_t));
   if (fst < n_vec)
-    memcpy(out + fst * stride, q->buf, (n_vec - fst) * stride * sizeof(mss_el_t));
+    memcpy(out + fst * stride, q->buf,
+           (n_vec - fst) * stride * sizeof(mss_el_t));
 
   q->head = (q->head + n_vec) % q->cap;
   q->fill -= n_vec;
