@@ -200,7 +200,8 @@ __device__ size_t d_f_snd_trm_build_matrix(
     const mss_el_t *c, const uint64_t *jk_prod_M, const uint64_t *nat_M,
     const uint64_t *nat_inv_M, uint64_t *A, uint64_t *prod_M_out, uint64_t p,
     uint64_t p_dash, uint64_t r) {
-  uint64_t typ[M];
+  static_assert((uint8_t)-1 > M);
+  uint8_t typ[M];
   size_t r_cnt = 0;
   for (size_t i = 0; i < M; ++i) {
     if (c[i]) {
@@ -212,13 +213,13 @@ __device__ size_t d_f_snd_trm_build_matrix(
   uint64_t prod_M = r;
 
   for (size_t a = 0; a < r_cnt; ++a) {
-    size_t i = typ[a];
+    uint8_t i = typ[a];
     if (c[i] == 1)
       continue;
 
     uint64_t sum = 0;
     for (size_t b = 0; b < r_cnt; ++b) {
-      size_t j = typ[b];
+      uint8_t j = typ[b];
       uint64_t W = jk_prod_M[d_jk_pos<M>(i, j)];
       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], W, p, p_dash), p);
     }
@@ -235,12 +236,12 @@ __device__ size_t d_f_snd_trm_build_matrix(
   }
 
   for (size_t a = 1; a < r_cnt; ++a) {
-    size_t i = typ[a];
+    uint8_t i = typ[a];
     uint64_t W_del = jk_prod_M[M - i];
     uint64_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
 
     for (size_t b = 1; b < r_cnt; ++b) {
-      size_t j = typ[b];
+      uint8_t j = typ[b];
       if (j == i)
         continue;
 
@@ -265,7 +266,8 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
                                               uint64_t *A, uint64_t *prod_M_out,
                                               uint64_t p, uint64_t p_dash,
                                               uint64_t r) {
-  uint64_t typ[M];
+  static_assert((uint8_t)-1 > M);
+  uint8_t typ[M];
   size_t dim = 0;
   for (size_t i = 0; i < M; ++i) {
     if (c[i]) {
@@ -277,10 +279,10 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
   uint64_t prod_M = r;
 
   for (size_t a = 0; a < dim; ++a) {
-    size_t i = typ[a];
+    uint8_t i = typ[a];
     uint64_t sum = r;
     for (size_t b = 0; b < dim; ++b) {
-      size_t j = typ[b];
+      uint8_t j = typ[b];
       uint64_t w = jk_prod_M[d_jk_pos<M>(i, j)];
       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], w, p, p_dash), p);
     }
@@ -293,11 +295,11 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
   }
 
   for (size_t a = 0; a < dim; ++a) {
-    size_t i = typ[a];
+    uint8_t i = typ[a];
     uint64_t diag = r;
 
     for (size_t b = 0; b < dim; ++b) {
-      size_t j = typ[b];
+      uint8_t j = typ[b];
       if (j == i)
         continue;
 
