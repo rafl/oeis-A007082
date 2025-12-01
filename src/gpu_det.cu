@@ -648,13 +648,13 @@ vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs) {
 
   // Allocate pinned host memory for faster async transfers
   CUDA_CHECK(
-      cudaMallocHost(&batch->h_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
+      cudaMallocHost(&batch->h_vecs, max_vecs * ctx->m * sizeof(mss_el_t)));
   CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(fld_t)));
 
   CUDA_CHECK(cudaStreamCreate(&batch->stream));
 
   // Allocate device memory - per-batch only
-  CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * ctx->m * sizeof(mss_el_t)));
   CUDA_CHECK(cudaMalloc(&batch->d_results, max_vecs * sizeof(fld_t)));
 
   return batch;
@@ -692,7 +692,7 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
 
   // Async copy H2D for this sub-batch
   CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs, batch->h_vecs,
-                             batch->count * m * sizeof(uint64_t),
+                             batch->count * m * sizeof(mss_el_t),
                              cudaMemcpyHostToDevice, stream));
 
   int num_blocks = (batch->count + block_size - 1) / block_size;
