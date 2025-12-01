@@ -670,7 +670,7 @@ static void CUDART_CB gpu_batch_done(void *data) {
   // Accumulate this batch's results locally
   fld_t local_acc = 0;
   for (size_t c = 0; c < n_vec; ++c) {
-    uint64_t result = vec_batch_get(batch, c);
+    fld_t result = vec_batch_get(batch, c);
     local_acc = add_mod_u64(local_acc, result, p);
   }
 

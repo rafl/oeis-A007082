@@ -52,7 +52,7 @@ void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs, size_t count);
 void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud);
 
 // Get result for a vector
-uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx);
+fld_t vec_batch_get(const vec_batch_t *batch, size_t idx);
 
 // Clear batch for reuse
 void vec_batch_clear(vec_batch_t *batch);

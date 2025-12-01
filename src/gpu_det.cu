@@ -112,7 +112,6 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2,
   fld_t u = (t + (dfld_t)m * p) >> FLD_BITS;
   if (u >= p) u -= p;
   if (u >= p) u -= p;
-  assert(u < p);
   return u;
 }
 
@@ -322,7 +321,7 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
 template <size_t M, size_t M_HALF>
 __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
                                 const gpu_kernel_ctx_t *ctx,
-                                uint64_t *results) {
+                                fld_t *results) {
   size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (vec_idx >= n_vecs)
     return;
@@ -515,11 +514,11 @@ struct gpu_context_t {
 struct vec_batch_t {
   // Host data (pinned for async transfers)
   mss_el_t *h_vecs;    // max_vecs * m
-  uint64_t *h_results; // max_vecs
+  fld_t *h_results; // max_vecs
 
   // Device data - per-batch only
   mss_el_t *d_vecs;
-  uint64_t *d_results;
+  fld_t *d_results;
 
   // CUDA stream for pipelining
   cudaStream_t stream;
@@ -650,13 +649,13 @@ vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs) {
   // Allocate pinned host memory for faster async transfers
   CUDA_CHECK(
       cudaMallocHost(&batch->h_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMallocHost(&batch->h_results, max_vecs * sizeof(fld_t)));
 
   CUDA_CHECK(cudaStreamCreate(&batch->stream));
 
   // Allocate device memory - per-batch only
   CUDA_CHECK(cudaMalloc(&batch->d_vecs, max_vecs * ctx->m * sizeof(uint64_t)));
-  CUDA_CHECK(cudaMalloc(&batch->d_results, max_vecs * sizeof(uint64_t)));
+  CUDA_CHECK(cudaMalloc(&batch->d_results, max_vecs * sizeof(fld_t)));
 
   return batch;
 }
@@ -725,13 +724,13 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
   CUDA_CHECK(cudaGetLastError());
 
   CUDA_CHECK(cudaMemcpyAsync(batch->h_results, batch->d_results,
-                             batch->count * sizeof(uint64_t),
+                             batch->count * sizeof(fld_t),
                              cudaMemcpyDeviceToHost, stream));
 
   CUDA_CHECK(cudaLaunchHostFunc(batch->stream, done, ud));
 }
 
-uint64_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
+fld_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
   assert(idx < batch->count);
   return batch->h_results[idx];
 }
