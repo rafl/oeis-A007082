@@ -42,14 +42,14 @@ struct gpu_kernel_ctx_t {
 
 // Helper function for jk_pos on device
 template <size_t M> __device__ inline size_t d_jk_pos(size_t j, size_t k) {
-  int64_t result = k - j;
-  return result >= 0 ? (uint64_t)result : result + M;
+  int result = k - j;
+  return result >= 0 ? (size_t)result : result + M;
 }
 
-__device__ inline uint64_t d_add_mod(uint64_t x, uint64_t y, uint64_t p) {
+__device__ inline fld_t d_add_mod(fld_t x, fld_t y, fld_t p) {
   x += y;
-  int64_t maybe = x - p;
-  return maybe < 0 ? x : (uint64_t)maybe;
+  sfld_t maybe = x - p;
+  return maybe < 0 ? x : (fld_t)maybe;
 }
 
 // Device-side Montgomery arithmetic helpers
@@ -57,12 +57,12 @@ __device__ inline fld_t d_mont_mul(fld_t a, fld_t b, fld_t p, fld_t p_dash) {
   dfld_t t = (dfld_t)a * b;
   fld_t m = (fld_t)t * p_dash;
   dfld_t u = t + (dfld_t)m * p;
-  uint64_t res = u >> FLD_BITS;
-  int64_t maybe = res - p;
+  fld_t res = u >> FLD_BITS;
+  sfld_t maybe = res - p;
   return maybe < 0 ? res : (fld_t)maybe;
 }
 
-__device__ inline fld_t d_mont_pow(fld_t b, uint64_t e, fld_t acc, fld_t p,
+__device__ inline fld_t d_mont_pow(fld_t b, mss_el_t e, fld_t acc, fld_t p,
                                    fld_t p_dash) {
   while (e) {
     if (e & 1)
@@ -159,23 +159,23 @@ __device__ inline fld_t d_f_fst_trm(const mss_el_t *vec, const fld_t *d_rs,
                                     const fld_t *d_jk_sums_pow_upper_M,
                                     const fld_t *d_jk_sums_pow_lower_M, fld_t p,
                                     fld_t p_dash) {
-  uint64_t e = 0;
+  uint16_t e = 0;
   // assert(m <= M);
-  uint64_t pows[M];
+  uint16_t pows[M];
   for (size_t i = 0; i < M; ++i) {
     pows[i] = 0;
   }
 
   for (size_t a = 0; a < M; ++a) {
-    uint64_t ca = vec[a];
+    uint16_t ca = vec[a];
     if (!ca)
       continue;
 
     e += (ca * (ca - 1));
 
     for (size_t b = a + 1; b < M; ++b) {
-      uint64_t cb = vec[b];
-      uint64_t diff = b - a;
+      uint16_t cb = vec[b];
+      uint16_t diff = b - a;
       pows[diff] += ca * cb;
     }
   }
@@ -326,10 +326,10 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
     return;
 
   // Load context values into registers
-  const uint64_t p = ctx->p;
-  const uint64_t p_dash = ctx->p_dash;
-  const uint64_t r = ctx->r;
-  const uint64_t r3 = ctx->r3;
+  const fld_t p = ctx->p;
+  const fld_t p_dash = ctx->p_dash;
+  const fld_t r = ctx->r;
+  const fld_t r3 = ctx->r3;
   const uint64_t n = ctx->n;
   const uint64_t n_args = ctx->n_args;
   const bool is_jack_mode = ctx->is_jack_mode;
@@ -363,7 +363,7 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
                                       &prod_M, p, p_dash, r);
   }
 
-  uint64_t f_snd_result;
+  fld_t f_snd_result;
   if (dim == 0) {
     f_snd_result = prod_M;
   } else {
@@ -392,7 +392,7 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
       }
 
       fld_t pivot = A[k * dim + k];
-      det = d_mont_mul(det, pivot, p, p_dash);
+      det = d_mont_mul(det, A[k * dim + k], p, p_dash);
 
       // Elimination
       for (size_t i = k + 1; i < dim; ++i) {
@@ -506,7 +506,7 @@ struct gpu_context_t {
   bool is_jack_mode;
 
   // Montgomery parameters
-  uint64_t p, p_dash, r, r3;
+  fld_t p, p_dash, r, r3;
 };
 
 // Per-batch data (multiple per worker for pipelining)
