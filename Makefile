@@ -23,7 +23,7 @@ LDFLAGS := $(shell pkg-config gmp --libs) -lm
 
 # GPU settings
 NVCC := nvcc
-CUDA_CFLAGS := -O3 -Iinclude -DDEBUG=$(DEBUG) -DUSE_GPU=1 -Xcompiler -Wall -Xcompiler -Wextra -arch sm_75
+CUDA_CFLAGS := -O3 -Iinclude -DDEBUG=$(DEBUG) -DUSE_GPU=1 -Xcompiler -Wall -Xcompiler -Wextra -arch sm_75 -Xptxas=-v
 CUDA_LDFLAGS := -lcudart
 
 ifeq ($(USE_GPU),1)

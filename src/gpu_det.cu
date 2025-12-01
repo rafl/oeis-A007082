@@ -53,8 +53,7 @@ __device__ inline uint64_t d_add_mod(uint64_t x, uint64_t y, uint64_t p) {
 }
 
 // Device-side Montgomery arithmetic helpers
-__device__ inline fld_t d_mont_mul(fld_t a, fld_t b, fld_t p,
-                                      fld_t p_dash) {
+__device__ inline fld_t d_mont_mul(fld_t a, fld_t b, fld_t p, fld_t p_dash) {
   dfld_t t = (dfld_t)a * b;
   fld_t m = (fld_t)t * p_dash;
   dfld_t u = t + (dfld_t)m * p;
@@ -63,8 +62,8 @@ __device__ inline fld_t d_mont_mul(fld_t a, fld_t b, fld_t p,
   return maybe < 0 ? res : (fld_t)maybe;
 }
 
-__device__ inline fld_t d_mont_pow(fld_t b, uint64_t e, fld_t acc,
-                                      fld_t p, fld_t p_dash) {
+__device__ inline fld_t d_mont_pow(fld_t b, uint64_t e, fld_t acc, fld_t p,
+                                   fld_t p_dash) {
   while (e) {
     if (e & 1)
       acc = d_mont_mul(acc, b, p, p_dash);
@@ -96,41 +95,41 @@ __device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
   return s0;
 }
 
-__device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p,
-                                      fld_t p_dash) {
+__device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
   fld_t inv = d_extended_euclidean(x, p);
   return d_mont_mul(r3, inv, p, p_dash);
 }
 
-__device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2,
-                                          fld_t b2, fld_t p,
-                                          fld_t p_dash) {
+__device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
+                                       fld_t p, fld_t p_dash) {
   dfld_t t1 = (dfld_t)a1 * b1;
   dfld_t t2 = (dfld_t)a2 * b2;
   dfld_t t = t1 + ((dfld_t)p << FLD_BITS) - t2;
   fld_t m = (fld_t)t * p_dash;
   fld_t u = (t + (dfld_t)m * p) >> FLD_BITS;
-  if (u >= p) u -= p;
-  if (u >= p) u -= p;
+  if (u >= p)
+    u -= p;
+  if (u >= p)
+    u -= p;
   return u;
 }
 
 // Device-side fast_pow_2 using rs cache
-__device__ inline fld_t d_fast_pow_2(const fld_t *d_rs, uint64_t pow,
-                                        fld_t p, fld_t p_dash) {
+__device__ inline fld_t d_fast_pow_2(const fld_t *d_rs, uint64_t pow, fld_t p,
+                                     fld_t p_dash) {
   uint64_t r_pow = pow / FLD_BITS;
   uint64_t remain = pow % FLD_BITS;
   uint64_t pow2 = 1UL << remain;
-// TODO: reduce?
+  // TODO: reduce?
   return d_mont_mul(pow2, d_rs[r_pow + 2], p, p_dash);
 }
 
 // Device-side jk_sums_pow using split power cache
 template <size_t M_HALF>
 __device__ inline fld_t d_jk_sums_pow(const fld_t *d_jk_sums_pow_upper_M,
-                                         const fld_t *d_jk_sums_pow_lower_M,
-                                         fld_t diff, uint64_t pow,
-                                         fld_t p, fld_t p_dash) {
+                                      const fld_t *d_jk_sums_pow_lower_M,
+                                      fld_t diff, uint64_t pow, fld_t p,
+                                      fld_t p_dash) {
   uint64_t upper_index = pow >> POW_CACHE_SPLIT;
   uint64_t lower_index = pow & (POW_CACHE_DIVISOR - 1);
 
@@ -156,11 +155,10 @@ d_multinomial_mod_p(const fld_t *d_fact_M, const fld_t *d_fact_inv_M,
 
 // Device-side f_fst_trm computation
 template <size_t M, size_t M_HALF>
-__device__ inline fld_t d_f_fst_trm(const mss_el_t *vec,
-                                       const fld_t *d_rs,
-                                       const fld_t *d_jk_sums_pow_upper_M,
-                                       const fld_t *d_jk_sums_pow_lower_M,
-                                       fld_t p, fld_t p_dash) {
+__device__ inline fld_t d_f_fst_trm(const mss_el_t *vec, const fld_t *d_rs,
+                                    const fld_t *d_jk_sums_pow_upper_M,
+                                    const fld_t *d_jk_sums_pow_lower_M, fld_t p,
+                                    fld_t p_dash) {
   uint64_t e = 0;
   // assert(m <= M);
   uint64_t pows[M];
@@ -196,10 +194,12 @@ __device__ inline fld_t d_f_fst_trm(const mss_el_t *vec,
 
 // Build matrix for f_snd_trm on GPU, return dimension and prod_M
 template <size_t M>
-__device__ size_t d_f_snd_trm_build_matrix(
-    const mss_el_t *c, const fld_t *jk_prod_M, const fld_t *nat_M,
-    const fld_t *nat_inv_M, fld_t *A, fld_t *prod_M_out, fld_t p,
-    fld_t p_dash, fld_t r) {
+__device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
+                                           const fld_t *jk_prod_M,
+                                           const fld_t *nat_M,
+                                           const fld_t *nat_inv_M, fld_t *A,
+                                           fld_t *prod_M_out, fld_t p,
+                                           fld_t p_dash, fld_t r) {
   static_assert((uint8_t)-1 > M);
   uint8_t typ[M];
   size_t r_cnt = 0;
@@ -262,10 +262,9 @@ __device__ size_t d_f_snd_trm_build_matrix(
 template <size_t M>
 __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
                                               const fld_t *jk_prod_M,
-                                              const fld_t *nat_M,
-                                              fld_t *A, fld_t *prod_M_out,
-                                              fld_t p, fld_t p_dash,
-                                              fld_t r) {
+                                              const fld_t *nat_M, fld_t *A,
+                                              fld_t *prod_M_out, fld_t p,
+                                              fld_t p_dash, fld_t r) {
   static_assert((uint8_t)-1 > M);
   uint8_t typ[M];
   size_t dim = 0;
@@ -320,8 +319,8 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
 // Each thread processes one coefficient vector and produces final result
 template <size_t M, size_t M_HALF>
 __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
-                                const gpu_kernel_ctx_t *ctx,
-                                fld_t *results) {
+                                const gpu_kernel_ctx_t *ctx, fld_t *results,
+                                uint8_t dim_max) {
   size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (vec_idx >= n_vecs)
     return;
@@ -348,8 +347,8 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
   const mss_el_t *vec = &vecs[vec_idx * M];
 
   // Step 1: Compute f_fst_trm
-  fld_t f_fst_result = d_f_fst_trm<M, M_HALF>(
-      vec, d_rs, d_jk_sums_pow_upper_M, d_jk_sums_pow_lower_M, p, p_dash);
+  fld_t f_fst_result = d_f_fst_trm<M, M_HALF>(vec, d_rs, d_jk_sums_pow_upper_M,
+                                              d_jk_sums_pow_lower_M, p, p_dash);
 
   // Step 2: Compute f_snd_trm (build matrix + compute determinant)
   fld_t A[M * M];
@@ -513,7 +512,7 @@ struct gpu_context_t {
 // Per-batch data (multiple per worker for pipelining)
 struct vec_batch_t {
   // Host data (pinned for async transfers)
-  mss_el_t *h_vecs;    // max_vecs * m
+  mss_el_t *h_vecs; // max_vecs * m
   fld_t *h_results; // max_vecs
 
   // Device data - per-batch only
@@ -532,12 +531,11 @@ struct vec_batch_t {
 };
 
 gpu_context_t *gpu_context_new(
-    uint64_t n, uint64_t n_args, uint64_t m, fld_t p, fld_t p_dash,
-    fld_t r, fld_t r3, const fld_t *jk_prod_M, const fld_t *nat_M,
-    const fld_t *nat_inv_M, const fld_t *ws_M,
-    const fld_t *jk_sums_pow_lower_M, const fld_t *jk_sums_pow_upper_M,
-    const fld_t *rs, const fld_t *fact_M, const fld_t *fact_inv_M,
-    size_t m_half, size_t n_rs, bool is_jack_mode) {
+    uint64_t n, uint64_t n_args, uint64_t m, fld_t p, fld_t p_dash, fld_t r,
+    fld_t r3, const fld_t *jk_prod_M, const fld_t *nat_M,
+    const fld_t *nat_inv_M, const fld_t *ws_M, const fld_t *jk_sums_pow_lower_M,
+    const fld_t *jk_sums_pow_upper_M, const fld_t *rs, const fld_t *fact_M,
+    const fld_t *fact_inv_M, size_t m_half, size_t n_rs, bool is_jack_mode) {
   gpu_context_t *ctx = (gpu_context_t *)malloc(sizeof(gpu_context_t));
   assert(ctx);
 
@@ -575,23 +573,23 @@ gpu_context_t *gpu_context_new(
   CUDA_CHECK(cudaMemcpy(ctx->d_nat_M, nat_M, (n + 1) * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
   if (!is_jack_mode) {
-    CUDA_CHECK(cudaMemcpy(ctx->d_nat_inv_M, nat_inv_M,
-                          (n + 1) * sizeof(fld_t), cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(ctx->d_nat_inv_M, nat_inv_M, (n + 1) * sizeof(fld_t),
+                          cudaMemcpyHostToDevice));
   }
-  CUDA_CHECK(cudaMemcpy(ctx->d_ws_M, ws_M, m * sizeof(fld_t),
-                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(ctx->d_ws_M, ws_M, m * sizeof(fld_t), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_jk_sums_pow_lower_M, jk_sums_pow_lower_M,
                         POW_CACHE_DIVISOR * m_half * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_jk_sums_pow_upper_M, jk_sums_pow_upper_M,
                         POW_CACHE_DIVISOR * m_half * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(ctx->d_rs, rs, n_rs * sizeof(fld_t),
-                        cudaMemcpyHostToDevice));
+  CUDA_CHECK(
+      cudaMemcpy(ctx->d_rs, rs, n_rs * sizeof(fld_t), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(ctx->d_fact_M, fact_M, (n + 1) * sizeof(fld_t),
                         cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(ctx->d_fact_inv_M, fact_inv_M,
-                        (n + 1) * sizeof(fld_t), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(ctx->d_fact_inv_M, fact_inv_M, (n + 1) * sizeof(fld_t),
+                        cudaMemcpyHostToDevice));
 
   // Create device-side kernel context struct
   gpu_kernel_ctx_t h_ctx = {
@@ -668,12 +666,13 @@ void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs,
   batch->count = count;
 }
 
-#define LAUNCH_KERNEL(M, stream, count)                                        \
+#define LAUNCH_KERNEL(M, stream, count, dim_max)                               \
   vec_full_kernel<M, (M + 1) / 2><<<num_blocks, block_size, 0, stream>>>(      \
-      batch->d_vecs, (count), batch->ctx->d_ctx, batch->d_results)
+      batch->d_vecs, (count), batch->ctx->d_ctx, batch->d_results, dim_max)
 
 // Launch async GPU compute (non-blocking)
-void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
+void vec_batch_compute_async(vec_batch_t *batch, uint8_t vec_class,
+                             batch_cb_t done, void *ud) {
   if (batch->count == 0)
     return;
 
@@ -691,7 +690,7 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud) {
 
 #define LK(n)                                                                  \
   case n:                                                                      \
-    LAUNCH_KERNEL(n, stream, batch->count);                                    \
+    LAUNCH_KERNEL(n, stream, batch->count, vec_class - 1);                     \
     break;
 
   switch (m) {

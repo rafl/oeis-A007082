@@ -25,7 +25,7 @@ typedef struct {
   uint64_t n, n_args, m,
       m_half; // = (m+1)/2 - used for some jk_sums_pow cache stuff - see
               // jk_sums_pow
-  fld_t p,      // n = number of veritcies //obvious
+  fld_t p,    // n = number of veritcies //obvious
       p_dash, r, r2, r3, // montgomery stuff, a _M suffix implies something is
                          // in montgomery form
       // r is the equivilent of `1` in montgomary space. Which means `r^2` is
@@ -226,7 +226,7 @@ fld_t jk_sums_pow(const prim_ctx_t *ctx, uint64_t diff, uint64_t pow) {
 
 // Calculate the multinomal coefficient where the powers of x_i are given by *ms
 static fld_t multinomial_mod_p(const prim_ctx_t *ctx, const mss_el_t *ms,
-                                  size_t len) {
+                               size_t len) {
   const fld_t p = ctx->p, p_dash = ctx->p_dash;
 
   fld_t coeff = ctx->fact_M[ctx->n_args - 1];
@@ -347,7 +347,7 @@ static fld_t jack_snd_trm(mss_el_t *c, const prim_ctx_t *ctx) {
     // we're taking the multiplicity of 1 * this term
     // Jack wants this to start at 1 again
     fld_t diag = ctx->r; // mont_mul(ctx->nat_M[c[0]], W_del, p,
-                            // ctx->p_dash);
+                         // ctx->p_dash);
 
     // remaining off-diagonal blocks
     for (size_t b = 0; b < r; ++b) {
@@ -800,8 +800,8 @@ static void gpu_w_resume(void *ud) {
 }
 
 // Forward declaration
-static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
-                                  vec_batch_t **batches,
+static void gpu_send_class_buffer(worker_t *worker, uint8_t vec_class,
+                                  class_accum_t *accum, vec_batch_t **batches,
                                   mss_el_t **full_vecs_buffers,
                                   bool *batch_busy);
 
@@ -812,7 +812,7 @@ static resume_cb_t gpu_w_idle(void *ud) {
   // Flush all class buffers before going idle
   for (size_t c = 0; c < ctx->n_classes; c++) {
     if (ctx->class_accums[c].n_vec > 0) {
-      gpu_send_class_buffer(ctx->worker, &ctx->class_accums[c], ctx->batches,
+      gpu_send_class_buffer(ctx->worker, c, &ctx->class_accums[c], ctx->batches,
                             ctx->full_vecs_buffers, ctx->batch_busy);
     }
   }
@@ -825,8 +825,8 @@ static resume_cb_t gpu_w_idle(void *ud) {
 }
 
 // Helper: send a class buffer to GPU
-static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
-                                  vec_batch_t **batches,
+static void gpu_send_class_buffer(worker_t *worker, uint8_t vec_class,
+                                  class_accum_t *accum, vec_batch_t **batches,
                                   mss_el_t **full_vecs_buffers,
                                   bool *batch_busy) {
   if (accum->n_vec == 0)
@@ -857,7 +857,7 @@ static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
   worker->gpu_inflight++;
   pthread_mutex_unlock(&worker->gpu_mu);
 
-  vec_batch_compute_async(batch, gpu_batch_done, cb);
+  vec_batch_compute_async(batch, vec_class, gpu_batch_done, cb);
 
   // Reset accumulator
   accum->n_vec = 0;
@@ -944,8 +944,9 @@ static void *residue_for_prime_gpu(void *ud) {
 
         // If buffer is full, send to GPU
         if (accum->n_vec == GPU_BATCH_SIZE) {
-          gpu_send_class_buffer(worker, accum, batches, full_vecs_buffers,
-                                batch_busy);
+          assert(vec_class < (uint8_t)-1);
+          gpu_send_class_buffer(worker, vec_class, accum, batches,
+                                full_vecs_buffers, batch_busy);
         }
       }
     }
@@ -987,7 +988,8 @@ static size_t get_num_threads() {
 
 static int ret(proc_state_t *st, prim_ctx_t *ctx, fld_t acc, uint64_t *res,
                uint64_t *p_ret) {
-  fld_t m_pow = mont_pow(ctx->nat_M[ctx->m], ctx->n_args - 1, ctx->r, ctx->p, ctx->p_dash);
+  fld_t m_pow = mont_pow(ctx->nat_M[ctx->m], ctx->n_args - 1, ctx->r, ctx->p,
+                         ctx->p_dash);
   fld_t denom = mont_inv(m_pow, ctx->r3, ctx->p, ctx->p_dash);
   fld_t ret = mont_mul(mont_mul(acc, denom, ctx->p, ctx->p_dash), 1, ctx->p,
                        ctx->p_dash);

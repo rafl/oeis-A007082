@@ -104,8 +104,7 @@ inline fld_t sub_mod_u64(fld_t x, fld_t y, fld_t p) {
 // Pass `r` (montomery 1) into acc for regular power. If you're just going to
 // multiply your power into another number you can put that into acc instead to
 // save a multiply
-inline fld_t mont_pow(fld_t b, uint64_t e, fld_t acc, fld_t p,
-                         fld_t p_dash) {
+inline fld_t mont_pow(fld_t b, uint64_t e, fld_t acc, fld_t p, fld_t p_dash) {
   // Compute by repeated squaring
   while (e) {
     if (e & 1)
@@ -143,8 +142,7 @@ inline fld_t extended_euclidean(fld_t a, fld_t b) {
 #if !SLOW_DIVISION
 #define mont_inv(w, x, y, z) mont_inv_act((w), (x), (y), (z))
 
-inline fld_t mont_inv_act(fld_t x, fld_t r3, fld_t p,
-                             fld_t p_dash) {
+inline fld_t mont_inv_act(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
   fld_t inv = extended_euclidean(x, p);
   // inv gives us a value when multiplied gives 1, for a number that when mont
   // mulled gives 1 we need to times by r. For a number that when mont mulled
@@ -163,15 +161,17 @@ inline fld_t mont_inv_act(fld_t x, fld_t p, fld_t p_dash) {
 #endif
 
 // Does a1 * b1 - a2 * b2
-inline fld_t mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
-                             fld_t p, fld_t p_dash) {
+inline fld_t mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2, fld_t p,
+                          fld_t p_dash) {
   dfld_t t1 = (dfld_t)a1 * b1;
   dfld_t t2 = (dfld_t)a2 * b2;
   dfld_t t = t1 + ((dfld_t)p << FLD_BITS) - t2;
   fld_t m = (fld_t)t * p_dash;
   fld_t u = (t + (dfld_t)m * p) >> FLD_BITS;
-  if (u >= p) u -= p;
-  if (u >= p) u -= p;
+  if (u >= p)
+    u -= p;
+  if (u >= p)
+    u -= p;
   assert(u < p);
   return u;
 }
