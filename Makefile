@@ -114,6 +114,9 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c | $(OBJ_DIR) $(PGO_DIR)
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.cu | $(OBJ_DIR) $(PGO_DIR)
 	$(NVCC) $(CUDA_CFLAGS) -c $< -o $@
 
+# hack: dunno how to make compiler write deps with all the wrapping that's going on
+$(OBJ_DIR)/gpu_det.o: include/maths.h
+
 $(OBJ_DIR) $(PGO_DIR):
 	@mkdir -p $@
 
