@@ -42,9 +42,6 @@ void gpu_context_free(gpu_context_t *ctx);
 // Create a vector batch that uses a shared GPU context
 vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs);
 
-// Add a coefficient vector to the batch
-size_t vec_batch_add(vec_batch_t *batch, const mss_el_t *vec);
-
 // Add multiple coefficient vectors to the batch in bulk (more efficient)
 void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs, size_t count);
 
@@ -53,9 +50,6 @@ void vec_batch_compute_async(vec_batch_t *batch, batch_cb_t done, void *ud);
 
 // Get result for a vector
 fld_t vec_batch_get(const vec_batch_t *batch, size_t idx);
-
-// Clear batch for reuse
-void vec_batch_clear(vec_batch_t *batch);
 
 // Free batch
 void vec_batch_free(vec_batch_t *batch);

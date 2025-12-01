@@ -660,20 +660,12 @@ vec_batch_t *vec_batch_new(gpu_context_t *ctx, size_t max_vecs) {
   return batch;
 }
 
-size_t vec_batch_add(vec_batch_t *batch, const mss_el_t *vec) {
-  assert(batch->count < batch->max_vecs);
-  size_t idx = batch->count++;
-  size_t m = batch->ctx->m;
-  memcpy(&batch->h_vecs[idx * m], vec, m * sizeof(mss_el_t));
-  return idx;
-}
-
 void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs,
                         size_t count) {
-  assert(batch->count + count <= batch->max_vecs);
+  assert(count <= batch->max_vecs);
   size_t m = batch->ctx->m;
-  memcpy(&batch->h_vecs[batch->count * m], vecs, count * m * sizeof(mss_el_t));
-  batch->count += count;
+  memcpy(batch->h_vecs, vecs, count * m * sizeof(mss_el_t));
+  batch->count = count;
 }
 
 #define LAUNCH_KERNEL(M, stream, count)                                        \
@@ -734,8 +726,6 @@ fld_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
   assert(idx < batch->count);
   return batch->h_results[idx];
 }
-
-void vec_batch_clear(vec_batch_t *batch) { batch->count = 0; }
 
 void vec_batch_free(vec_batch_t *batch) {
   if (!batch)

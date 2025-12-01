@@ -842,7 +842,6 @@ static void gpu_send_class_buffer(worker_t *worker, class_accum_t *accum,
   accum->vecs = full_vecs_buffers[buf_idx]; // Accumulator gets the empty buffer
   full_vecs_buffers[buf_idx] = gpu_buf;     // GPU slot now points to full data
 
-  vec_batch_clear(batch);
   vec_batch_add_bulk(batch, gpu_buf, accum->n_vec);
 
   // Launch async GPU compute
