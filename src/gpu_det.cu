@@ -315,81 +315,131 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
   return dim;
 }
 
-// Compute f_snd_trm: build matrix and compute determinant
+// Compute f_snd_trm for David mode: build matrix and compute determinant
 template <size_t M, size_t DIM>
-__device__ fld_t d_compute_f_snd_trm(const mss_el_t *vec, const fld_t *d_jk_prod_M,
-                                     const fld_t *d_nat_M, const fld_t *d_nat_inv_M,
-                                     fld_t p, fld_t p_dash, fld_t r, fld_t r3,
-                                     bool is_jack_mode) {
-  fld_t A[M * M];
+__device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec, const fld_t *d_jk_prod_M,
+                                           const fld_t *d_nat_M, const fld_t *d_nat_inv_M,
+                                           fld_t p, fld_t p_dash, fld_t r, fld_t r3) {
   fld_t prod_M;
-  size_t dim;
 
-  if (is_jack_mode) {
-    dim = d_jack_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, A, &prod_M,
-                                         p, p_dash, r);
+  if constexpr (DIM == 0) {
+    // DIM=0: no matrix needed
+    d_f_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, NULL,
+                                 &prod_M, p, p_dash, r);
+    return prod_M;
   } else {
-    dim = d_f_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A,
-                                      &prod_M, p, p_dash, r);
-  }
+    // DIM > 0: build matrix and compute determinant
+    fld_t A[DIM * DIM];
+    size_t dim = DIM;
 
-  // Compute determinant via Gaussian elimination
-  fld_t det = r, scaling_factor = r;
+    d_f_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A,
+                                       &prod_M, p, p_dash, r);
 
-  for (size_t k = 0; k < dim; ++k) {
-    // Find pivot
-    size_t pivot_i = k;
-    while (pivot_i < dim && A[pivot_i * dim + k] == 0)
-      ++pivot_i;
+    // Compute determinant via Gaussian elimination
+    fld_t det = r, scaling_factor = r;
 
-    if (pivot_i == dim) {
-      det = 0;
-      break;
-    }
+    for (size_t k = 0; k < dim; ++k) {
+      // Find pivot
+      size_t pivot_i = k;
+      while (pivot_i < dim && A[pivot_i * dim + k] == 0)
+        ++pivot_i;
 
-    // Swap rows if needed
-    if (pivot_i != k) {
-      for (size_t j = 0; j < dim; ++j) {
-        fld_t tmp = A[k * dim + j];
-        A[k * dim + j] = A[pivot_i * dim + j];
-        A[pivot_i * dim + j] = tmp;
+      if (pivot_i == dim) {
+        det = 0;
+        break;
       }
-      det = p - det;
-    }
 
-    fld_t pivot = A[k * dim + k];
-    det = d_mont_mul(det, A[k * dim + k], p, p_dash);
+      // Swap rows if needed
+      if (pivot_i != k) {
+        for (size_t j = 0; j < dim; ++j) {
+          fld_t tmp = A[k * dim + j];
+          A[k * dim + j] = A[pivot_i * dim + j];
+          A[pivot_i * dim + j] = tmp;
+        }
+        det = p - det;
+      }
 
-    // Elimination
-    for (size_t i = k + 1; i < dim; ++i) {
-      scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-      fld_t multiplier = A[i * dim + k];
-      for (size_t j = k; j < dim; ++j) {
-        A[i * dim + j] = d_mont_mul_sub(A[i * dim + j], pivot, A[k * dim + j],
-                                        multiplier, p, p_dash);
+      fld_t pivot = A[k * dim + k];
+      det = d_mont_mul(det, A[k * dim + k], p, p_dash);
+
+      // Elimination
+      for (size_t i = k + 1; i < dim; ++i) {
+        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+        fld_t multiplier = A[i * dim + k];
+        for (size_t j = k; j < dim; ++j) {
+          A[i * dim + j] = d_mont_mul_sub(A[i * dim + j], pivot, A[k * dim + j],
+                                          multiplier, p, p_dash);
+        }
       }
     }
+
+    det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
+
+    return d_mont_mul(prod_M, det, p, p_dash);
   }
-
-  det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
-
-  return d_mont_mul(prod_M, det, p, p_dash);
 }
 
-template <size_t M>
-__device__ fld_t d_compute_f_snd_trm<M, 0>(const mss_el_t *vec, const fld_t *d_jk_prod_M,
-                                     const fld_t *d_nat_M, const fld_t *d_nat_inv_M,
-                                     fld_t p, fld_t p_dash, fld_t r, fld_t r3,
-                                     bool is_jack_mode) {
+// Compute f_snd_trm for Jack mode: build matrix and compute determinant
+template <size_t M, size_t DIM>
+__device__ fld_t d_compute_f_snd_trm_jack(const mss_el_t *vec, const fld_t *d_jk_prod_M,
+                                          const fld_t *d_nat_M,
+                                          fld_t p, fld_t p_dash, fld_t r, fld_t r3) {
   fld_t prod_M;
-  if (is_jack_mode) {
+
+  if constexpr (DIM <= 1) {
+    // DIM <= 1: no matrix needed, builder returns 0
     d_jack_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, NULL, &prod_M,
-                                         p, p_dash, r);
+                                    p, p_dash, r);
+    return prod_M;
   } else {
-    d_f_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, NULL,
-                                      &prod_M, p, p_dash, r);
+    // DIM > 1: build matrix and compute determinant
+    fld_t A[DIM * DIM];
+
+    d_jack_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, A, &prod_M,
+                                    p, p_dash, r);
+
+    // Compute determinant via Gaussian elimination
+    fld_t det = r, scaling_factor = r;
+
+    for (size_t k = 0; k < DIM; ++k) {
+      // Find pivot
+      size_t pivot_i = k;
+      while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
+        ++pivot_i;
+
+      if (pivot_i == DIM) {
+        det = 0;
+        break;
+      }
+
+      // Swap rows if needed
+      if (pivot_i != k) {
+        for (size_t j = 0; j < DIM; ++j) {
+          fld_t tmp = A[k * DIM + j];
+          A[k * DIM + j] = A[pivot_i * DIM + j];
+          A[pivot_i * DIM + j] = tmp;
+        }
+        det = p - det;
+      }
+
+      fld_t pivot = A[k * DIM + k];
+      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
+
+      // Elimination
+      for (size_t i = k + 1; i < DIM; ++i) {
+        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+        fld_t multiplier = A[i * DIM + k];
+        for (size_t j = k; j < DIM; ++j) {
+          A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
+                                          multiplier, p, p_dash);
+        }
+      }
+    }
+
+    det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
+
+    return d_mont_mul(prod_M, det, p, p_dash);
   }
-  return prod_M;
 }
 
 // Comprehensive kernel: computes full david() or jack() result on GPU
@@ -427,9 +477,11 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
                                               d_jk_sums_pow_lower_M, p, p_dash);
 
   // Step 2: Compute f_snd_trm (build matrix + compute determinant)
-  fld_t f_snd_result = d_compute_f_snd_trm<M, DIM>(vec, d_jk_prod_M, d_nat_M,
-                                                    d_nat_inv_M, p, p_dash, r, r3,
-                                                    is_jack_mode);
+  fld_t f_snd_result = is_jack_mode
+                           ? d_compute_f_snd_trm_jack<M, DIM + 1>(vec, d_jk_prod_M, d_nat_M,
+                                                                   p, p_dash, r, r3)
+                           : d_compute_f_snd_trm_david<M, DIM>(vec, d_jk_prod_M, d_nat_M,
+                                                                d_nat_inv_M, p, p_dash, r, r3);
 
   // Step 3: Multiply f_fst_result and f_snd_result to get f_0
   fld_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
@@ -716,8 +768,7 @@ void vec_batch_compute_async(vec_batch_t *batch, uint8_t vec_class,
 
 #define LK(n)                                                                  \
   case n: {                                                                    \
-    uint8_t dim = vec_class;                                               \
-    if (!batch->ctx->is_jack_mode) --dim; \
+    uint8_t dim = vec_class-1;                                               \
     switch (dim) {                                                             \
       LK_DIM(n, 0);                                                            \
       LK_DIM(n, 1);                                                            \
