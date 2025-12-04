@@ -193,13 +193,12 @@ __device__ inline fld_t d_f_fst_trm(const mss_el_t *vec, const fld_t *d_rs,
 }
 
 // Build matrix for f_snd_trm on GPU, return dimension and prod_M
-template <size_t M>
+template <size_t M, size_t DIM>
 __device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
                                            const fld_t *jk_prod_M,
                                            const fld_t *nat_M,
                                            const fld_t *nat_inv_M, fld_t *A,
-                                           fld_t *prod_M_out, fld_t p,
-                                           fld_t p_dash, fld_t r) {
+                                           fld_t p, fld_t p_dash, fld_t r) {
   static_assert((uint8_t)-1 > M);
   uint8_t typ[M];
   size_t r_cnt = 0;
@@ -228,14 +227,11 @@ __device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
   }
 
   prod_M = d_mont_mul(prod_M, nat_inv_M[c[0]], p, p_dash);
-  size_t dim = r_cnt - 1;
 
-  if (dim == 0) {
-    *prod_M_out = prod_M;
-    return 0;
-  }
-
-  for (size_t a = 1; a < r_cnt; ++a) {
+  if constexpr (DIM == 0) {
+    return prod_M;
+  } else {
+  for (size_t a = 1; a <= DIM; ++a) {
     uint8_t i = typ[a];
     fld_t W_del = jk_prod_M[M - i];
     fld_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
@@ -247,24 +243,23 @@ __device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
 
       fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
       fld_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
-      A[(a - 1) * dim + (b - 1)] = p - v;
+      A[(a - 1) * DIM + (b - 1)] = p - v;
       diag = d_add_mod(diag, v, p);
     }
 
-    A[(a - 1) * dim + (a - 1)] = diag;
+    A[(a - 1) * DIM + (a - 1)] = diag;
+  }
   }
 
-  *prod_M_out = prod_M;
-  return dim;
+  return prod_M;
 }
 
 // Build matrix for jack_snd_trm on GPU
-template <size_t M>
+template <size_t M, size_t DIM>
 __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
                                               const fld_t *jk_prod_M,
                                               const fld_t *nat_M, fld_t *A,
-                                              fld_t *prod_M_out, fld_t p,
-                                              fld_t p_dash, fld_t r) {
+                                              fld_t p, fld_t p_dash, fld_t r) {
   static_assert((uint8_t)-1 > M);
   uint8_t typ[M];
   size_t dim = 0;
@@ -277,10 +272,10 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
 
   fld_t prod_M = r;
 
-  for (size_t a = 0; a < dim; ++a) {
+  for (size_t a = 0; a < DIM; ++a) {
     uint8_t i = typ[a];
     fld_t sum = r;
-    for (size_t b = 0; b < dim; ++b) {
+    for (size_t b = 0; b < DIM; ++b) {
       uint8_t j = typ[b];
       fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], w, p, p_dash), p);
@@ -288,31 +283,29 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
     prod_M = d_mont_pow(sum, c[i] - 1, prod_M, p, p_dash);
   }
 
-  if (dim <= 1) {
-    *prod_M_out = prod_M;
-    return 0;
-  }
-
-  for (size_t a = 0; a < dim; ++a) {
+  if constexpr (DIM <= 1) {
+    return prod_M;
+  } else {
+  for (size_t a = 0; a < DIM; ++a) {
     uint8_t i = typ[a];
     fld_t diag = r;
 
-    for (size_t b = 0; b < dim; ++b) {
+    for (size_t b = 0; b < DIM; ++b) {
       uint8_t j = typ[b];
       if (j == i)
         continue;
 
       fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
       fld_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
-      A[(a)*dim + (b)] = p - v;
+      A[(a)*DIM + (b)] = p - v;
       diag = d_add_mod(diag, v, p);
     }
 
-    A[(a)*dim + (a)] = diag;
+    A[(a)*DIM + (a)] = diag;
   }
 
-  *prod_M_out = prod_M;
-  return dim;
+  return prod_M;
+  }
 }
 
 // Compute f_snd_trm for David mode: build matrix and compute determinant
@@ -320,54 +313,48 @@ template <size_t M, size_t DIM>
 __device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec, const fld_t *d_jk_prod_M,
                                            const fld_t *d_nat_M, const fld_t *d_nat_inv_M,
                                            fld_t p, fld_t p_dash, fld_t r, fld_t r3) {
-  fld_t prod_M;
-
   if constexpr (DIM == 0) {
     // DIM=0: no matrix needed
-    d_f_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, NULL,
-                                 &prod_M, p, p_dash, r);
-    return prod_M;
+    return d_f_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, NULL, p, p_dash, r);
   } else {
     // DIM > 0: build matrix and compute determinant
     fld_t A[DIM * DIM];
-    size_t dim = DIM;
 
-    d_f_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A,
-                                       &prod_M, p, p_dash, r);
+    fld_t prod_M = d_f_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A, p, p_dash, r);
 
     // Compute determinant via Gaussian elimination
     fld_t det = r, scaling_factor = r;
 
-    for (size_t k = 0; k < dim; ++k) {
+    for (size_t k = 0; k < DIM; ++k) {
       // Find pivot
       size_t pivot_i = k;
-      while (pivot_i < dim && A[pivot_i * dim + k] == 0)
+      while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
         ++pivot_i;
 
-      if (pivot_i == dim) {
+      if (pivot_i == DIM) {
         det = 0;
         break;
       }
 
       // Swap rows if needed
       if (pivot_i != k) {
-        for (size_t j = 0; j < dim; ++j) {
-          fld_t tmp = A[k * dim + j];
-          A[k * dim + j] = A[pivot_i * dim + j];
-          A[pivot_i * dim + j] = tmp;
+        for (size_t j = 0; j < DIM; ++j) {
+          fld_t tmp = A[k * DIM + j];
+          A[k * DIM + j] = A[pivot_i * DIM + j];
+          A[pivot_i * DIM + j] = tmp;
         }
         det = p - det;
       }
 
-      fld_t pivot = A[k * dim + k];
-      det = d_mont_mul(det, A[k * dim + k], p, p_dash);
+      fld_t pivot = A[k * DIM + k];
+      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
 
       // Elimination
-      for (size_t i = k + 1; i < dim; ++i) {
+      for (size_t i = k + 1; i < DIM; ++i) {
         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        fld_t multiplier = A[i * dim + k];
-        for (size_t j = k; j < dim; ++j) {
-          A[i * dim + j] = d_mont_mul_sub(A[i * dim + j], pivot, A[k * dim + j],
+        fld_t multiplier = A[i * DIM + k];
+        for (size_t j = k; j < DIM; ++j) {
+          A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
                                           multiplier, p, p_dash);
         }
       }
@@ -384,19 +371,14 @@ template <size_t M, size_t DIM>
 __device__ fld_t d_compute_f_snd_trm_jack(const mss_el_t *vec, const fld_t *d_jk_prod_M,
                                           const fld_t *d_nat_M,
                                           fld_t p, fld_t p_dash, fld_t r, fld_t r3) {
-  fld_t prod_M;
-
   if constexpr (DIM <= 1) {
     // DIM <= 1: no matrix needed, builder returns 0
-    d_jack_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, NULL, &prod_M,
-                                    p, p_dash, r);
-    return prod_M;
+    return d_jack_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, NULL, p, p_dash, r);
   } else {
     // DIM > 1: build matrix and compute determinant
     fld_t A[DIM * DIM];
 
-    d_jack_snd_trm_build_matrix<M>(vec, d_jk_prod_M, d_nat_M, A, &prod_M,
-                                    p, p_dash, r);
+    fld_t prod_M = d_jack_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, A, p, p_dash, r);
 
     // Compute determinant via Gaussian elimination
     fld_t det = r, scaling_factor = r;
@@ -761,63 +743,253 @@ void vec_batch_compute_async(vec_batch_t *batch, uint8_t vec_class,
 
   int num_blocks = (batch->count + block_size - 1) / block_size;
 
-#define LK_DIM(M, DIM)                                                         \
-  case DIM:                                                                    \
-    LAUNCH_KERNEL(M, DIM, stream, batch->count);                               \
-    break;
-
-#define LK(n)                                                                  \
-  case n: {                                                                    \
-    uint8_t dim = vec_class-1;                                               \
-    switch (dim) {                                                             \
-      LK_DIM(n, 0);                                                            \
-      LK_DIM(n, 1);                                                            \
-      LK_DIM(n, 2);                                                            \
-      LK_DIM(n, 3);                                                            \
-      LK_DIM(n, 4);                                                            \
-      LK_DIM(n, 5);                                                            \
-      LK_DIM(n, 6);                                                            \
-      LK_DIM(n, 7);                                                            \
-      LK_DIM(n, 8);                                                            \
-      LK_DIM(n, 9);                                                            \
-      LK_DIM(n, 10);                                                           \
-      LK_DIM(n, 11);                                                           \
-      LK_DIM(n, 12);                                                           \
-      LK_DIM(n, 13);                                                           \
-      LK_DIM(n, 14);                                                           \
-      LK_DIM(n, 15);                                                           \
-      LK_DIM(n, 16);                                                           \
-      LK_DIM(n, 17);                                                           \
-      LK_DIM(n, 18);                                                           \
-      LK_DIM(n, 19);                                                           \
-      LK_DIM(n, 20);                                                           \
-      LK_DIM(n, 21);                                                           \
-    default:                                                                   \
-      printf("\ndim=%u\n", dim);                                               \
-      assert("unsupported dim" && 0);                                          \
-    }                                                                          \
-    break;                                                                     \
-  }
+  uint8_t dim = vec_class - 1;
 
   switch (m) {
-    LK(3);
-    LK(5);
-    LK(7);
-    LK(9);
-    LK(11);
-    LK(13);
-    LK(15);
-    LK(17);
-    LK(19);
-    LK(21);
-    LK(23);
-    LK(25);
+  case 3:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(3, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(3, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(3, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(3, 3, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 5:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(5, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(5, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(5, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(5, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(5, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(5, 5, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 7:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(7, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(7, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(7, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(7, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(7, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(7, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(7, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(7, 7, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 9:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(9, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(9, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(9, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(9, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(9, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(9, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(9, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(9, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(9, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(9, 9, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 11:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(11, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(11, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(11, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(11, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(11, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(11, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(11, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(11, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(11, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(11, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(11, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(11, 11, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 13:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(13, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(13, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(13, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(13, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(13, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(13, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(13, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(13, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(13, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(13, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(13, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(13, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(13, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(13, 13, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 15:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(15, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(15, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(15, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(15, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(15, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(15, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(15, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(15, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(15, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(15, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(15, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(15, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(15, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(15, 13, stream, batch->count); break;
+    case 14: LAUNCH_KERNEL(15, 14, stream, batch->count); break;
+    case 15: LAUNCH_KERNEL(15, 15, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 17:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(17, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(17, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(17, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(17, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(17, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(17, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(17, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(17, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(17, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(17, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(17, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(17, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(17, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(17, 13, stream, batch->count); break;
+    case 14: LAUNCH_KERNEL(17, 14, stream, batch->count); break;
+    case 15: LAUNCH_KERNEL(17, 15, stream, batch->count); break;
+    case 16: LAUNCH_KERNEL(17, 16, stream, batch->count); break;
+    case 17: LAUNCH_KERNEL(17, 17, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 19:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(19, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(19, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(19, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(19, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(19, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(19, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(19, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(19, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(19, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(19, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(19, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(19, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(19, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(19, 13, stream, batch->count); break;
+    case 14: LAUNCH_KERNEL(19, 14, stream, batch->count); break;
+    case 15: LAUNCH_KERNEL(19, 15, stream, batch->count); break;
+    case 16: LAUNCH_KERNEL(19, 16, stream, batch->count); break;
+    case 17: LAUNCH_KERNEL(19, 17, stream, batch->count); break;
+    case 18: LAUNCH_KERNEL(19, 18, stream, batch->count); break;
+    case 19: LAUNCH_KERNEL(19, 19, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 21:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(21, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(21, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(21, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(21, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(21, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(21, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(21, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(21, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(21, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(21, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(21, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(21, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(21, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(21, 13, stream, batch->count); break;
+    case 14: LAUNCH_KERNEL(21, 14, stream, batch->count); break;
+    case 15: LAUNCH_KERNEL(21, 15, stream, batch->count); break;
+    case 16: LAUNCH_KERNEL(21, 16, stream, batch->count); break;
+    case 17: LAUNCH_KERNEL(21, 17, stream, batch->count); break;
+    case 18: LAUNCH_KERNEL(21, 18, stream, batch->count); break;
+    case 19: LAUNCH_KERNEL(21, 19, stream, batch->count); break;
+    case 20: LAUNCH_KERNEL(21, 20, stream, batch->count); break;
+    case 21: LAUNCH_KERNEL(21, 21, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 23:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(23, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(23, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(23, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(23, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(23, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(23, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(23, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(23, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(23, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(23, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(23, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(23, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(23, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(23, 13, stream, batch->count); break;
+    case 14: LAUNCH_KERNEL(23, 14, stream, batch->count); break;
+    case 15: LAUNCH_KERNEL(23, 15, stream, batch->count); break;
+    case 16: LAUNCH_KERNEL(23, 16, stream, batch->count); break;
+    case 17: LAUNCH_KERNEL(23, 17, stream, batch->count); break;
+    case 18: LAUNCH_KERNEL(23, 18, stream, batch->count); break;
+    case 19: LAUNCH_KERNEL(23, 19, stream, batch->count); break;
+    case 20: LAUNCH_KERNEL(23, 20, stream, batch->count); break;
+    case 21: LAUNCH_KERNEL(23, 21, stream, batch->count); break;
+    case 22: LAUNCH_KERNEL(23, 22, stream, batch->count); break;
+    case 23: LAUNCH_KERNEL(23, 23, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
+  case 25:
+    switch (dim) {
+    case 0: LAUNCH_KERNEL(25, 0, stream, batch->count); break;
+    case 1: LAUNCH_KERNEL(25, 1, stream, batch->count); break;
+    case 2: LAUNCH_KERNEL(25, 2, stream, batch->count); break;
+    case 3: LAUNCH_KERNEL(25, 3, stream, batch->count); break;
+    case 4: LAUNCH_KERNEL(25, 4, stream, batch->count); break;
+    case 5: LAUNCH_KERNEL(25, 5, stream, batch->count); break;
+    case 6: LAUNCH_KERNEL(25, 6, stream, batch->count); break;
+    case 7: LAUNCH_KERNEL(25, 7, stream, batch->count); break;
+    case 8: LAUNCH_KERNEL(25, 8, stream, batch->count); break;
+    case 9: LAUNCH_KERNEL(25, 9, stream, batch->count); break;
+    case 10: LAUNCH_KERNEL(25, 10, stream, batch->count); break;
+    case 11: LAUNCH_KERNEL(25, 11, stream, batch->count); break;
+    case 12: LAUNCH_KERNEL(25, 12, stream, batch->count); break;
+    case 13: LAUNCH_KERNEL(25, 13, stream, batch->count); break;
+    case 14: LAUNCH_KERNEL(25, 14, stream, batch->count); break;
+    case 15: LAUNCH_KERNEL(25, 15, stream, batch->count); break;
+    case 16: LAUNCH_KERNEL(25, 16, stream, batch->count); break;
+    case 17: LAUNCH_KERNEL(25, 17, stream, batch->count); break;
+    case 18: LAUNCH_KERNEL(25, 18, stream, batch->count); break;
+    case 19: LAUNCH_KERNEL(25, 19, stream, batch->count); break;
+    case 20: LAUNCH_KERNEL(25, 20, stream, batch->count); break;
+    case 21: LAUNCH_KERNEL(25, 21, stream, batch->count); break;
+    case 22: LAUNCH_KERNEL(25, 22, stream, batch->count); break;
+    case 23: LAUNCH_KERNEL(25, 23, stream, batch->count); break;
+    case 24: LAUNCH_KERNEL(25, 24, stream, batch->count); break;
+    case 25: LAUNCH_KERNEL(25, 25, stream, batch->count); break;
+    default: assert(false);
+    }
+    break;
   default:
     printf("\nm=%lu\n", m);
     assert("unsupported m" && 0);
   }
-#undef LK
-#undef LK_DIM
 
   CUDA_CHECK(cudaGetLastError());
 
