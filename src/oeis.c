@@ -4,6 +4,10 @@
 #include "source_combine.h"
 #include "source_jack.h"
 #include "source_process.h"
+#ifdef USE_GPU
+#include "gpu_compute.h"
+#include "source_gpu.h"
+#endif
 
 #include <getopt.h>
 #include <gmp.h>
@@ -44,16 +48,17 @@ static process_mode_t parse_jack(const char *s) {
 
 static struct option long_opts[] = {
     {"jack", required_argument, NULL, 'j'},
+    {"gpu", no_argument, NULL, 'g'},
 };
 
 int main(int argc, char **argv) {
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
   process_mode_t proc_mode = PROC_MODE_REG;
-  bool quiet = false, snapshot = false;
+  bool quiet = false, snapshot = false, use_gpu = false;
 
   for (;;) {
-    int c = getopt_long(argc, argv, "m:pcqs", long_opts, NULL);
+    int c = getopt_long(argc, argv, "m:pcqsg", long_opts, NULL);
     if (c == -1)
       break;
 
@@ -76,6 +81,9 @@ int main(int argc, char **argv) {
     case 'j':
       proc_mode = parse_jack(optarg);
       break;
+    case 'g':
+      use_gpu = true;
+      break;
     }
   }
   assert(mode < MODE_LAST);
@@ -85,14 +93,43 @@ int main(int argc, char **argv) {
   if (argc > optind)
     n = parse_uint(argv[optind]);
 
-  source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool,
-                       size_t *) = source_process_new;
-  if (proc_mode == PROC_MODE_JACKBOTH)
-    newproc = source_jack_new;
+#ifdef USE_GPU
+  if (use_gpu && !gpu_available()) {
+    fprintf(stderr, "GPU requested but not available\n");
+    return 1;
+  }
+  if (use_gpu && snapshot) {
+    fprintf(stderr, "GPU mode does not support snapshots\n");
+    return 1;
+  }
+#else
+  if (use_gpu) {
+    fprintf(stderr, "GPU support not compiled in\n");
+    return 1;
+  }
+#endif
 
-  source_t *src = (mode & MODE_PROCESS)
-                      ? newproc(proc_mode, n, m_id, quiet, snapshot, NULL)
-                      : source_stdin_new();
+  source_t *src;
+  if (mode & MODE_PROCESS) {
+#ifdef USE_GPU
+    if (use_gpu) {
+      src = source_gpu_new(proc_mode, n, m_id, quiet);
+      if (!src) {
+        fprintf(stderr, "Failed to create GPU source\n");
+        return 1;
+      }
+    } else
+#endif
+    {
+      source_t *(*newproc)(process_mode_t, uint64_t, uint64_t, bool, bool,
+                           size_t *) = source_process_new;
+      if (proc_mode == PROC_MODE_JACKBOTH)
+        newproc = source_jack_new;
+      src = newproc(proc_mode, n, m_id, quiet, snapshot, NULL);
+    }
+  } else {
+    src = source_stdin_new();
+  }
   comb_ctx_t *crt = (mode & MODE_COMBINE) ? comb_ctx_new() : NULL;
 
   bool converged = false;
