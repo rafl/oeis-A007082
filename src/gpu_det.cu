@@ -231,24 +231,24 @@ __device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
   if constexpr (DIM == 0) {
     return prod_M;
   } else {
-  for (size_t a = 1; a <= DIM; ++a) {
-    uint8_t i = typ[a];
-    fld_t W_del = jk_prod_M[M - i];
-    fld_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
+    for (size_t a = 1; a <= DIM; ++a) {
+      uint8_t i = typ[a];
+      fld_t W_del = jk_prod_M[M - i];
+      fld_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
 
-    for (size_t b = 1; b < r_cnt; ++b) {
-      uint8_t j = typ[b];
-      if (j == i)
-        continue;
+      for (size_t b = 1; b < r_cnt; ++b) {
+        uint8_t j = typ[b];
+        if (j == i)
+          continue;
 
-      fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
-      fld_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
-      A[(a - 1) * DIM + (b - 1)] = p - v;
-      diag = d_add_mod(diag, v, p);
+        fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
+        fld_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
+        A[(a - 1) * DIM + (b - 1)] = p - v;
+        diag = d_add_mod(diag, v, p);
+      }
+
+      A[(a - 1) * DIM + (a - 1)] = diag;
     }
-
-    A[(a - 1) * DIM + (a - 1)] = diag;
-  }
   }
 
   return prod_M;
@@ -286,41 +286,45 @@ __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
   if constexpr (DIM <= 1) {
     return prod_M;
   } else {
-  for (size_t a = 0; a < DIM; ++a) {
-    uint8_t i = typ[a];
-    fld_t diag = r;
+    for (size_t a = 0; a < DIM; ++a) {
+      uint8_t i = typ[a];
+      fld_t diag = r;
 
-    for (size_t b = 0; b < DIM; ++b) {
-      uint8_t j = typ[b];
-      if (j == i)
-        continue;
+      for (size_t b = 0; b < DIM; ++b) {
+        uint8_t j = typ[b];
+        if (j == i)
+          continue;
 
-      fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
-      fld_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
-      A[(a)*DIM + (b)] = p - v;
-      diag = d_add_mod(diag, v, p);
+        fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
+        fld_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
+        A[(a)*DIM + (b)] = p - v;
+        diag = d_add_mod(diag, v, p);
+      }
+
+      A[(a)*DIM + (a)] = diag;
     }
 
-    A[(a)*DIM + (a)] = diag;
-  }
-
-  return prod_M;
+    return prod_M;
   }
 }
 
 // Compute f_snd_trm for David mode: build matrix and compute determinant
 template <size_t M, size_t DIM>
-__device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec, const fld_t *d_jk_prod_M,
-                                           const fld_t *d_nat_M, const fld_t *d_nat_inv_M,
-                                           fld_t p, fld_t p_dash, fld_t r, fld_t r3) {
+__device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec,
+                                           const fld_t *d_jk_prod_M,
+                                           const fld_t *d_nat_M,
+                                           const fld_t *d_nat_inv_M, fld_t p,
+                                           fld_t p_dash, fld_t r, fld_t r3) {
   if constexpr (DIM == 0) {
     // DIM=0: no matrix needed
-    return d_f_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, NULL, p, p_dash, r);
+    return d_f_snd_trm_build_matrix<M, DIM>(vec, d_jk_prod_M, d_nat_M,
+                                            d_nat_inv_M, NULL, p, p_dash, r);
   } else {
     // DIM > 0: build matrix and compute determinant
     fld_t A[DIM * DIM];
 
-    fld_t prod_M = d_f_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A, p, p_dash, r);
+    fld_t prod_M = d_f_snd_trm_build_matrix<M, DIM>(
+        vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A, p, p_dash, r);
 
     // Compute determinant via Gaussian elimination
     fld_t det = r, scaling_factor = r;
@@ -368,17 +372,20 @@ __device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec, const fld_t *d_j
 
 // Compute f_snd_trm for Jack mode: build matrix and compute determinant
 template <size_t M, size_t DIM>
-__device__ fld_t d_compute_f_snd_trm_jack(const mss_el_t *vec, const fld_t *d_jk_prod_M,
-                                          const fld_t *d_nat_M,
-                                          fld_t p, fld_t p_dash, fld_t r, fld_t r3) {
+__device__ fld_t d_compute_f_snd_trm_jack(const mss_el_t *vec,
+                                          const fld_t *d_jk_prod_M,
+                                          const fld_t *d_nat_M, fld_t p,
+                                          fld_t p_dash, fld_t r, fld_t r3) {
   if constexpr (DIM <= 1) {
     // DIM <= 1: no matrix needed, builder returns 0
-    return d_jack_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, NULL, p, p_dash, r);
+    return d_jack_snd_trm_build_matrix<M, DIM>(vec, d_jk_prod_M, d_nat_M, NULL,
+                                               p, p_dash, r);
   } else {
     // DIM > 1: build matrix and compute determinant
     fld_t A[DIM * DIM];
 
-    fld_t prod_M = d_jack_snd_trm_build_matrix<M,DIM>(vec, d_jk_prod_M, d_nat_M, A, p, p_dash, r);
+    fld_t prod_M = d_jack_snd_trm_build_matrix<M, DIM>(
+        vec, d_jk_prod_M, d_nat_M, A, p, p_dash, r);
 
     // Compute determinant via Gaussian elimination
     fld_t det = r, scaling_factor = r;
@@ -459,11 +466,12 @@ __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
                                               d_jk_sums_pow_lower_M, p, p_dash);
 
   // Step 2: Compute f_snd_trm (build matrix + compute determinant)
-  fld_t f_snd_result = is_jack_mode
-                           ? d_compute_f_snd_trm_jack<M, DIM + 1>(vec, d_jk_prod_M, d_nat_M,
-                                                                   p, p_dash, r, r3)
-                           : d_compute_f_snd_trm_david<M, DIM>(vec, d_jk_prod_M, d_nat_M,
-                                                                d_nat_inv_M, p, p_dash, r, r3);
+  fld_t f_snd_result =
+      is_jack_mode
+          ? d_compute_f_snd_trm_jack<M, DIM + 1>(vec, d_jk_prod_M, d_nat_M, p,
+                                                 p_dash, r, r3)
+          : d_compute_f_snd_trm_david<M, DIM>(vec, d_jk_prod_M, d_nat_M,
+                                              d_nat_inv_M, p, p_dash, r, r3);
 
   // Step 3: Multiply f_fst_result and f_snd_result to get f_0
   fld_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
@@ -748,242 +756,614 @@ void vec_batch_compute_async(vec_batch_t *batch, uint8_t vec_class,
   switch (m) {
   case 3:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(3, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(3, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(3, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(3, 3, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(3, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(3, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(3, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(3, 3, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 5:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(5, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(5, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(5, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(5, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(5, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(5, 5, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(5, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(5, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(5, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(5, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(5, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(5, 5, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 7:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(7, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(7, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(7, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(7, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(7, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(7, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(7, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(7, 7, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(7, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(7, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(7, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(7, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(7, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(7, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(7, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(7, 7, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 9:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(9, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(9, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(9, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(9, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(9, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(9, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(9, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(9, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(9, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(9, 9, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(9, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(9, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(9, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(9, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(9, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(9, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(9, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(9, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(9, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(9, 9, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 11:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(11, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(11, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(11, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(11, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(11, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(11, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(11, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(11, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(11, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(11, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(11, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(11, 11, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(11, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(11, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(11, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(11, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(11, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(11, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(11, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(11, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(11, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(11, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(11, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(11, 11, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 13:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(13, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(13, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(13, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(13, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(13, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(13, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(13, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(13, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(13, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(13, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(13, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(13, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(13, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(13, 13, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(13, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(13, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(13, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(13, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(13, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(13, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(13, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(13, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(13, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(13, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(13, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(13, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(13, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(13, 13, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 15:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(15, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(15, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(15, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(15, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(15, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(15, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(15, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(15, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(15, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(15, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(15, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(15, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(15, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(15, 13, stream, batch->count); break;
-    case 14: LAUNCH_KERNEL(15, 14, stream, batch->count); break;
-    case 15: LAUNCH_KERNEL(15, 15, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(15, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(15, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(15, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(15, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(15, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(15, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(15, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(15, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(15, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(15, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(15, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(15, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(15, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(15, 13, stream, batch->count);
+      break;
+    case 14:
+      LAUNCH_KERNEL(15, 14, stream, batch->count);
+      break;
+    case 15:
+      LAUNCH_KERNEL(15, 15, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 17:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(17, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(17, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(17, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(17, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(17, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(17, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(17, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(17, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(17, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(17, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(17, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(17, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(17, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(17, 13, stream, batch->count); break;
-    case 14: LAUNCH_KERNEL(17, 14, stream, batch->count); break;
-    case 15: LAUNCH_KERNEL(17, 15, stream, batch->count); break;
-    case 16: LAUNCH_KERNEL(17, 16, stream, batch->count); break;
-    case 17: LAUNCH_KERNEL(17, 17, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(17, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(17, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(17, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(17, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(17, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(17, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(17, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(17, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(17, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(17, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(17, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(17, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(17, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(17, 13, stream, batch->count);
+      break;
+    case 14:
+      LAUNCH_KERNEL(17, 14, stream, batch->count);
+      break;
+    case 15:
+      LAUNCH_KERNEL(17, 15, stream, batch->count);
+      break;
+    case 16:
+      LAUNCH_KERNEL(17, 16, stream, batch->count);
+      break;
+    case 17:
+      LAUNCH_KERNEL(17, 17, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 19:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(19, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(19, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(19, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(19, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(19, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(19, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(19, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(19, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(19, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(19, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(19, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(19, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(19, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(19, 13, stream, batch->count); break;
-    case 14: LAUNCH_KERNEL(19, 14, stream, batch->count); break;
-    case 15: LAUNCH_KERNEL(19, 15, stream, batch->count); break;
-    case 16: LAUNCH_KERNEL(19, 16, stream, batch->count); break;
-    case 17: LAUNCH_KERNEL(19, 17, stream, batch->count); break;
-    case 18: LAUNCH_KERNEL(19, 18, stream, batch->count); break;
-    case 19: LAUNCH_KERNEL(19, 19, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(19, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(19, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(19, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(19, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(19, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(19, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(19, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(19, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(19, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(19, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(19, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(19, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(19, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(19, 13, stream, batch->count);
+      break;
+    case 14:
+      LAUNCH_KERNEL(19, 14, stream, batch->count);
+      break;
+    case 15:
+      LAUNCH_KERNEL(19, 15, stream, batch->count);
+      break;
+    case 16:
+      LAUNCH_KERNEL(19, 16, stream, batch->count);
+      break;
+    case 17:
+      LAUNCH_KERNEL(19, 17, stream, batch->count);
+      break;
+    case 18:
+      LAUNCH_KERNEL(19, 18, stream, batch->count);
+      break;
+    case 19:
+      LAUNCH_KERNEL(19, 19, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 21:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(21, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(21, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(21, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(21, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(21, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(21, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(21, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(21, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(21, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(21, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(21, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(21, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(21, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(21, 13, stream, batch->count); break;
-    case 14: LAUNCH_KERNEL(21, 14, stream, batch->count); break;
-    case 15: LAUNCH_KERNEL(21, 15, stream, batch->count); break;
-    case 16: LAUNCH_KERNEL(21, 16, stream, batch->count); break;
-    case 17: LAUNCH_KERNEL(21, 17, stream, batch->count); break;
-    case 18: LAUNCH_KERNEL(21, 18, stream, batch->count); break;
-    case 19: LAUNCH_KERNEL(21, 19, stream, batch->count); break;
-    case 20: LAUNCH_KERNEL(21, 20, stream, batch->count); break;
-    case 21: LAUNCH_KERNEL(21, 21, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(21, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(21, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(21, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(21, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(21, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(21, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(21, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(21, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(21, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(21, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(21, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(21, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(21, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(21, 13, stream, batch->count);
+      break;
+    case 14:
+      LAUNCH_KERNEL(21, 14, stream, batch->count);
+      break;
+    case 15:
+      LAUNCH_KERNEL(21, 15, stream, batch->count);
+      break;
+    case 16:
+      LAUNCH_KERNEL(21, 16, stream, batch->count);
+      break;
+    case 17:
+      LAUNCH_KERNEL(21, 17, stream, batch->count);
+      break;
+    case 18:
+      LAUNCH_KERNEL(21, 18, stream, batch->count);
+      break;
+    case 19:
+      LAUNCH_KERNEL(21, 19, stream, batch->count);
+      break;
+    case 20:
+      LAUNCH_KERNEL(21, 20, stream, batch->count);
+      break;
+    case 21:
+      LAUNCH_KERNEL(21, 21, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 23:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(23, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(23, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(23, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(23, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(23, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(23, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(23, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(23, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(23, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(23, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(23, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(23, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(23, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(23, 13, stream, batch->count); break;
-    case 14: LAUNCH_KERNEL(23, 14, stream, batch->count); break;
-    case 15: LAUNCH_KERNEL(23, 15, stream, batch->count); break;
-    case 16: LAUNCH_KERNEL(23, 16, stream, batch->count); break;
-    case 17: LAUNCH_KERNEL(23, 17, stream, batch->count); break;
-    case 18: LAUNCH_KERNEL(23, 18, stream, batch->count); break;
-    case 19: LAUNCH_KERNEL(23, 19, stream, batch->count); break;
-    case 20: LAUNCH_KERNEL(23, 20, stream, batch->count); break;
-    case 21: LAUNCH_KERNEL(23, 21, stream, batch->count); break;
-    case 22: LAUNCH_KERNEL(23, 22, stream, batch->count); break;
-    case 23: LAUNCH_KERNEL(23, 23, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(23, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(23, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(23, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(23, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(23, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(23, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(23, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(23, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(23, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(23, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(23, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(23, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(23, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(23, 13, stream, batch->count);
+      break;
+    case 14:
+      LAUNCH_KERNEL(23, 14, stream, batch->count);
+      break;
+    case 15:
+      LAUNCH_KERNEL(23, 15, stream, batch->count);
+      break;
+    case 16:
+      LAUNCH_KERNEL(23, 16, stream, batch->count);
+      break;
+    case 17:
+      LAUNCH_KERNEL(23, 17, stream, batch->count);
+      break;
+    case 18:
+      LAUNCH_KERNEL(23, 18, stream, batch->count);
+      break;
+    case 19:
+      LAUNCH_KERNEL(23, 19, stream, batch->count);
+      break;
+    case 20:
+      LAUNCH_KERNEL(23, 20, stream, batch->count);
+      break;
+    case 21:
+      LAUNCH_KERNEL(23, 21, stream, batch->count);
+      break;
+    case 22:
+      LAUNCH_KERNEL(23, 22, stream, batch->count);
+      break;
+    case 23:
+      LAUNCH_KERNEL(23, 23, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   case 25:
     switch (dim) {
-    case 0: LAUNCH_KERNEL(25, 0, stream, batch->count); break;
-    case 1: LAUNCH_KERNEL(25, 1, stream, batch->count); break;
-    case 2: LAUNCH_KERNEL(25, 2, stream, batch->count); break;
-    case 3: LAUNCH_KERNEL(25, 3, stream, batch->count); break;
-    case 4: LAUNCH_KERNEL(25, 4, stream, batch->count); break;
-    case 5: LAUNCH_KERNEL(25, 5, stream, batch->count); break;
-    case 6: LAUNCH_KERNEL(25, 6, stream, batch->count); break;
-    case 7: LAUNCH_KERNEL(25, 7, stream, batch->count); break;
-    case 8: LAUNCH_KERNEL(25, 8, stream, batch->count); break;
-    case 9: LAUNCH_KERNEL(25, 9, stream, batch->count); break;
-    case 10: LAUNCH_KERNEL(25, 10, stream, batch->count); break;
-    case 11: LAUNCH_KERNEL(25, 11, stream, batch->count); break;
-    case 12: LAUNCH_KERNEL(25, 12, stream, batch->count); break;
-    case 13: LAUNCH_KERNEL(25, 13, stream, batch->count); break;
-    case 14: LAUNCH_KERNEL(25, 14, stream, batch->count); break;
-    case 15: LAUNCH_KERNEL(25, 15, stream, batch->count); break;
-    case 16: LAUNCH_KERNEL(25, 16, stream, batch->count); break;
-    case 17: LAUNCH_KERNEL(25, 17, stream, batch->count); break;
-    case 18: LAUNCH_KERNEL(25, 18, stream, batch->count); break;
-    case 19: LAUNCH_KERNEL(25, 19, stream, batch->count); break;
-    case 20: LAUNCH_KERNEL(25, 20, stream, batch->count); break;
-    case 21: LAUNCH_KERNEL(25, 21, stream, batch->count); break;
-    case 22: LAUNCH_KERNEL(25, 22, stream, batch->count); break;
-    case 23: LAUNCH_KERNEL(25, 23, stream, batch->count); break;
-    case 24: LAUNCH_KERNEL(25, 24, stream, batch->count); break;
-    case 25: LAUNCH_KERNEL(25, 25, stream, batch->count); break;
-    default: assert(false);
+    case 0:
+      LAUNCH_KERNEL(25, 0, stream, batch->count);
+      break;
+    case 1:
+      LAUNCH_KERNEL(25, 1, stream, batch->count);
+      break;
+    case 2:
+      LAUNCH_KERNEL(25, 2, stream, batch->count);
+      break;
+    case 3:
+      LAUNCH_KERNEL(25, 3, stream, batch->count);
+      break;
+    case 4:
+      LAUNCH_KERNEL(25, 4, stream, batch->count);
+      break;
+    case 5:
+      LAUNCH_KERNEL(25, 5, stream, batch->count);
+      break;
+    case 6:
+      LAUNCH_KERNEL(25, 6, stream, batch->count);
+      break;
+    case 7:
+      LAUNCH_KERNEL(25, 7, stream, batch->count);
+      break;
+    case 8:
+      LAUNCH_KERNEL(25, 8, stream, batch->count);
+      break;
+    case 9:
+      LAUNCH_KERNEL(25, 9, stream, batch->count);
+      break;
+    case 10:
+      LAUNCH_KERNEL(25, 10, stream, batch->count);
+      break;
+    case 11:
+      LAUNCH_KERNEL(25, 11, stream, batch->count);
+      break;
+    case 12:
+      LAUNCH_KERNEL(25, 12, stream, batch->count);
+      break;
+    case 13:
+      LAUNCH_KERNEL(25, 13, stream, batch->count);
+      break;
+    case 14:
+      LAUNCH_KERNEL(25, 14, stream, batch->count);
+      break;
+    case 15:
+      LAUNCH_KERNEL(25, 15, stream, batch->count);
+      break;
+    case 16:
+      LAUNCH_KERNEL(25, 16, stream, batch->count);
+      break;
+    case 17:
+      LAUNCH_KERNEL(25, 17, stream, batch->count);
+      break;
+    case 18:
+      LAUNCH_KERNEL(25, 18, stream, batch->count);
+      break;
+    case 19:
+      LAUNCH_KERNEL(25, 19, stream, batch->count);
+      break;
+    case 20:
+      LAUNCH_KERNEL(25, 20, stream, batch->count);
+      break;
+    case 21:
+      LAUNCH_KERNEL(25, 21, stream, batch->count);
+      break;
+    case 22:
+      LAUNCH_KERNEL(25, 22, stream, batch->count);
+      break;
+    case 23:
+      LAUNCH_KERNEL(25, 23, stream, batch->count);
+      break;
+    case 24:
+      LAUNCH_KERNEL(25, 24, stream, batch->count);
+      break;
+    case 25:
+      LAUNCH_KERNEL(25, 25, stream, batch->count);
+      break;
+    default:
+      assert(false);
     }
     break;
   default:
