@@ -1094,9 +1094,9 @@ static int proc_next(source_t *self, uint64_t *res, uint64_t *p_ret) {
   for (size_t i = 0; i < n_workers; ++i)
     pthread_join(worker[i], NULL);
 
-  queue_free(q);
   if (st->snapshot)
     snapshot_stop(&ss);
+  queue_free(q);
 
   if (!st->quiet)
     progress_stop(&prog);

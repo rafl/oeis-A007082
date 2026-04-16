@@ -5,13 +5,21 @@
 #include "source_jack.h"
 #include "source_process.h"
 
+#include "interrupt.h"
+
 #include <getopt.h>
 #include <gmp.h>
 #include <inttypes.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+
+static void handle_sigint(int sig) {
+  (void)sig;
+  g_interrupted = 1;
+}
 
 typedef enum {
   MODE_NONE = 0,
@@ -47,6 +55,10 @@ static struct option long_opts[] = {
 };
 
 int main(int argc, char **argv) {
+  struct sigaction sa = {.sa_handler = handle_sigint};
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, NULL);
+
   uint64_t n = 13, m_id = 0;
   prog_mode_t mode = MODE_NONE;
   process_mode_t proc_mode = PROC_MODE_REG;
@@ -99,6 +111,8 @@ int main(int argc, char **argv) {
   size_t i = 0;
   uint64_t res, p;
   while (src->next(src, &res, &p) > 0) {
+    if (g_interrupted)
+      break;
     if (mode & MODE_PROCESS && !quiet)
       printf("%" PRIu64 " %% %" PRIu64 "\n", res, p);
     if (mode & MODE_COMBINE) {
@@ -120,7 +134,7 @@ int main(int argc, char **argv) {
   }
   src->destroy(src);
 
-  if (mode & MODE_COMBINE) {
+  if (!g_interrupted && mode & MODE_COMBINE) {
     if (!converged) {
       if (quiet)
         gmp_printf("%Zd\n", crt->X);

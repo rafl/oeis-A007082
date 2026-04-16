@@ -1,5 +1,6 @@
 #include "queue.h"
 #include "debug.h"
+#include "interrupt.h"
 
 #include <stdatomic.h>
 #include <stdlib.h>
@@ -111,7 +112,7 @@ void queue_fill(queue_t *restrict q) {
 
     queue_push(q, q->vecs, n_vec);
 
-    if (n_vec < CHUNK)
+    if (n_vec < CHUNK || g_interrupted)
       break;
   }
 
