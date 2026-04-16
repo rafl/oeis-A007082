@@ -698,11 +698,9 @@ static void CUDART_CB gpu_batch_done(void *data) {
 }
 #endif
 
-static resume_cb_t w_idle(void *ud) {
-  worker_t *w = ud;
+static void w_flush(worker_t *w) {
 #ifdef USE_GPU
   if (w->is_gpu_worker) {
-    // Ensure all in-flight GPU work for this worker has completed
     pthread_mutex_lock(&w->gpu_mu);
     while (w->gpu_inflight > 0)
       pthread_cond_wait(&w->gpu_cv, &w->gpu_mu);
@@ -713,6 +711,11 @@ static resume_cb_t w_idle(void *ud) {
   *w->acc = add_mod_u64(*w->acc, *w->l_acc, w->ctx->p);
   *w->l_acc = 0;
   pthread_mutex_unlock(w->acc_mu);
+}
+
+static resume_cb_t w_idle(void *ud) {
+  worker_t *w = ud;
+  w_flush(w);
   w->idle = true;
   return w_resume;
 }
@@ -812,22 +815,18 @@ static void gpu_send_class_buffer(worker_t *worker, uint8_t vec_class,
                                   mss_el_t **full_vecs_buffers,
                                   bool *batch_busy);
 
-// GPU worker idle callback: flush all class buffers before going idle
-static resume_cb_t gpu_w_idle(void *ud) {
-  gpu_idle_ctx_t *ctx = ud;
-
-  // Flush all class buffers before going idle
-  for (size_t c = 0; c < ctx->n_classes; c++) {
-    if (ctx->class_accums[c].n_vec > 0) {
+static void gpu_flush(gpu_idle_ctx_t *ctx) {
+  for (size_t c = 0; c < ctx->n_classes; c++)
+    if (ctx->class_accums[c].n_vec > 0)
       gpu_send_class_buffer(ctx->worker, c, &ctx->class_accums[c], ctx->batches,
                             ctx->full_vecs_buffers, ctx->batch_busy);
-    }
-  }
+  w_flush(ctx->worker);
+}
 
-  // Call the real w_idle to wait for GPU and merge accumulator
-  (void)w_idle(ctx->worker);
-
-  // Return gpu_w_resume which properly extracts worker from ctx
+static resume_cb_t gpu_w_idle(void *ud) {
+  gpu_idle_ctx_t *ctx = ud;
+  gpu_flush(ctx);
+  ctx->worker->idle = true;
   return gpu_w_resume;
 }
 
@@ -959,10 +958,9 @@ static void *residue_for_prime_gpu(void *ud) {
     }
 
     if (is_gpu_paused(worker->device_id)) {
-      resume_cb_t resume = gpu_w_idle(&idle_ctx);
+      gpu_flush(&idle_ctx);
       while (is_gpu_paused(worker->device_id) && !g_interrupted)
         usleep(500000);
-      resume(&idle_ctx);
     }
   }
 
