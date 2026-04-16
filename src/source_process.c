@@ -1,5 +1,6 @@
 #include "source_process.h"
 #include "debug.h"
+#include "interrupt.h"
 #include "maths.h"
 #include "mss.h"
 #include "primes.h"
@@ -621,6 +622,12 @@ typedef struct {
 
 #ifdef USE_GPU
 #define NUM_GPU_BUFFERS 16
+
+static bool is_gpu_paused(int device_id) {
+  char path[PATH_MAX];
+  snprintf(path, sizeof(path), "/tmp/oeislow%d", device_id);
+  return access(path, F_OK) == 0;
+}
 #endif
 
 typedef struct {
@@ -949,6 +956,13 @@ static void *residue_for_prime_gpu(void *ud) {
                                 full_vecs_buffers, batch_busy);
         }
       }
+    }
+
+    if (is_gpu_paused(worker->device_id)) {
+      resume_cb_t resume = gpu_w_idle(&idle_ctx);
+      while (is_gpu_paused(worker->device_id) && !g_interrupted)
+        usleep(500000);
+      resume(&idle_ctx);
     }
   }
 
