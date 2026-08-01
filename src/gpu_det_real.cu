@@ -128,6 +128,8 @@ for (int lp = 0; lp <= 256; lp++)
           }
         }
       }
+
+      __syncthreads();
     }
   }
 
@@ -157,7 +159,7 @@ void det_mod_p_gpu(u_int32_t const * values, uint32_t * results, u_int32_t n_mat
     u_int32_t *device_result;
     CUDA_CHECK(cudaMalloc(&device_result, n_matricies * sizeof(u_int32_t)));
 
-    for (int i = 0; i < 10000; i++)
+    for (int i = 0; i < 1000; i++)
     {
     // 3. Launch the kernel using the triple angle bracket execution syntax
     det_mod_p_kernel<<<blocksPerGrid, threadsPerBlock>>>(device_buffer, device_result, p, p_dash, r, r3, n_matricies);

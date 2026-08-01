@@ -263,7 +263,7 @@ int main(int argc, char **argv) {
 
     det_mod_p_gpu(buffer, result_buffer, NUM_MATRICIES, prim_ctx->p, prim_ctx->p_dash, prim_ctx->r, prim_ctx->r3);
 
-    for (int i = 0 ; i <= 32; i++)
+    for (int i = 0 ; i <= 32 * 256; i+=256)
     {
         printf("%u\n", result_buffer[i]);
     }
