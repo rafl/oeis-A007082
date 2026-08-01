@@ -99,7 +99,8 @@ __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out,
                                         ) {
 
 int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
-    fld_t * A = data + (SIZE * SIZE) * workIdx;
+    // fld_t * A = data + (SIZE * SIZE) * workIdx;
+
     if (workIdx >= num_matricies)
     {
         return;
@@ -111,7 +112,7 @@ int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
     for (size_t k = 0; k < DIM; ++k) {
       // Find pivot
       size_t pivot_i = k;
-      while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
+      while (pivot_i < DIM && data[(pivot_i * DIM + k) * blockDim.x + threadIdx.x] == 0)
         ++pivot_i;
 
       if (pivot_i == DIM) {
@@ -129,15 +130,15 @@ int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
       //   det = p - det;
       // }
 
-      fld_t pivot = A[k * DIM + k];
-      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
+      fld_t pivot = data[(k * DIM + k) * blockDim.x + threadIdx.x];
+      det = d_mont_mul(det, data[(k * DIM + k) * blockDim.x + threadIdx.x], p, p_dash);
 
       // Elimination
       for (size_t i = k + 1; i < DIM; ++i) {
         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        fld_t multiplier = A[i * DIM + k];
+        fld_t multiplier = data[(i * DIM + k) * blockDim.x + threadIdx.x];
         for (size_t j = k; j < DIM; ++j) {
-          A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
+          data[(i * DIM + j) * blockDim.x + threadIdx.x] = d_mont_mul_sub(data[(i * DIM + j) * blockDim.x + threadIdx.x], pivot, data[(k * DIM + j) * blockDim.x + threadIdx.x],
                                           multiplier, p, p_dash);
         }
       }
