@@ -59,6 +59,8 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
   return u;
 }
 
+
+#define SIZE 20
 // #define fld_t u_int32_t
 #define DIM SIZE
 
@@ -119,15 +121,15 @@ int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
         break;
       }
 
-      // // Swap rows if needed
-      // if (pivot_i != k) {
-      //   for (size_t j = 0; j < DIM; ++j) {
-      //     fld_t tmp = A[k * DIM + j];
-      //     A[k * DIM + j] = A[pivot_i * DIM + j];
-      //     A[pivot_i * DIM + j] = tmp;
-      //   }
-      //   det = p - det;
-      // }
+      // Swap rows if needed
+      if (pivot_i != k) {
+        for (size_t j = 0; j < DIM; ++j) {
+          fld_t tmp = A[k * DIM + j];
+          A[k * DIM + j] = A[pivot_i * DIM + j];
+          A[pivot_i * DIM + j] = tmp;
+        }
+        det = p - det;
+      }
 
       fld_t pivot = A[k * DIM + k];
       det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
@@ -143,7 +145,7 @@ int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
       }
     }
 
-    out[workIdx] = det; // d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
+    out[workIdx] = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
 
     
   }
@@ -166,7 +168,7 @@ void det_mod_p_gpu(u_int32_t const * values, uint32_t * results, u_int32_t n_mat
     u_int32_t *device_result;
     CUDA_CHECK(cudaMalloc(&device_result, n_matricies * sizeof(u_int32_t)));
 
-    for (int i = 0; i < 10000; i++)
+    for (int i = 0; i < 1000; i++)
     {
     // 3. Launch the kernel using the triple angle bracket execution syntax
     det_mod_p_kernel<<<blocksPerGrid, threadsPerBlock>>>(device_buffer, device_result, p, p_dash, r, r3, n_matricies);

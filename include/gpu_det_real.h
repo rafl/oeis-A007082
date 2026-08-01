@@ -1,7 +1,5 @@
 #include "maths.h"
 
-#define SIZE 16
-
 #ifdef __cplusplus
 extern "C" {
 #endif
