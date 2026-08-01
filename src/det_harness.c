@@ -230,7 +230,7 @@ static fld_t det_mod_p(fld_t *A, size_t dim, const prim_ctx_t *ctx) {
 #define M 21
 #define ROWS SIZE
 #define COLS SIZE
-#define NUM_MATRICIES (5000)
+#define NUM_MATRICIES (100*1000)
 #define P 1073741971
 
 void fill_random_matrices(int *buffer, size_t n, int max_value)
