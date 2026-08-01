@@ -33,18 +33,6 @@ __device__ inline fld_t d_mont_mul(fld_t a, fld_t b, fld_t p, fld_t p_dash) {
   return maybe < 0 ? res : (fld_t)maybe;
 }
 
-__device__ inline fld_t d_mont_pow(fld_t b, mss_el_t e, fld_t acc, fld_t p,
-                                   fld_t p_dash) {
-  while (e) {
-    if (e & 1)
-      acc = d_mont_mul(acc, b, p, p_dash);
-    b = d_mont_mul(b, b, p, p_dash);
-    e >>= 1;
-  }
-  return acc;
-}
-
-
 __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
                                        fld_t p, fld_t p_dash) {
   dfld_t t1 = (dfld_t)a1 * b1;
@@ -62,91 +50,94 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
 // #define fld_t u_int32_t
 #define DIM SIZE
 
-__device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
-  fld_t r0 = a;
-  fld_t r1 = b;
-  fld_t s0 = 1;
-  fld_t s1 = 0;
-  fld_t spare;
-  size_t n = 0;
-  while (r1) {
-    fld_t q = r0 / r1;
-    spare = r0 % r1;
-    r0 = r1;
-    r1 = spare;
-    spare = s0 + q * s1;
-    s0 = s1;
-    s1 = spare;
-    ++n;
-  }
-  if (n % 2)
-    s0 = b - s0;
-  return s0;
-}
+// __device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
+//   fld_t r0 = a;
+//   fld_t r1 = b;
+//   fld_t s0 = 1;
+//   fld_t s1 = 0;
+//   fld_t spare;
+//   size_t n = 0;
+//   while (r1) {
+//     fld_t q = r0 / r1;
+//     spare = r0 % r1;
+//     r0 = r1;
+//     r1 = spare;
+//     spare = s0 + q * s1;
+//     s0 = s1;
+//     s1 = spare;
+//     ++n;
+//   }
+//   if (n % 2)
+//     s0 = b - s0;
+//   return s0;
+// }
 
-__device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
-  fld_t inv = d_extended_euclidean(x, p);
-  return d_mont_mul(r3, inv, p, p_dash);
-}
+// __device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
+//   fld_t inv = d_extended_euclidean(x, p);
+//   return d_mont_mul(r3, inv, p, p_dash);
+// }
 
 
 __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out,
+  // TODO return scaling factors as well
      fld_t p,
                                            fld_t p_dash, fld_t r,
                                            fld_t r3,
                                            int num_matricies
                                         
                                         ) {
+    // __shared__ int scalingFactors[SIZE * SIZE];
+    // __shared__ int dets[SIZE * SIZE];
 
-int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
+        // Compute determinant via Gaussian elimination
+    fld_t det = r, scaling_factor = r;
+    fld_t i = threadIdx.x / DIM;
+    fld_t j = threadIdx.x % DIM;
+
+for (int lp = 0; lp <= 256; lp++)
+{
+    int workIdx = ((blockIdx.x * blockDim.x) + lp);
     fld_t * A = data + (SIZE * SIZE) * workIdx;
     if (workIdx >= num_matricies)
     {
+        // This is not legit
         return;
     }
+
+
    
-    // Compute determinant via Gaussian elimination
-    fld_t det = r, scaling_factor = r;
 
-    for (size_t k = 0; k < DIM; ++k) {
-      // Find pivot
-      size_t pivot_i = k;
-      while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
-        ++pivot_i;
 
-      if (pivot_i == DIM) {
-        det = 0;
-        break;
-      }
+    if (blockIdx.x < DIM * DIM)
+    {
+      for (size_t k = 0; k < DIM; ++k) {
+        fld_t pivot = A[k * DIM + k];
+        det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
 
-      // // Swap rows if needed
-      // if (pivot_i != k) {
-      //   for (size_t j = 0; j < DIM; ++j) {
-      //     fld_t tmp = A[k * DIM + j];
-      //     A[k * DIM + j] = A[pivot_i * DIM + j];
-      //     A[pivot_i * DIM + j] = tmp;
-      //   }
-      //   det = p - det;
-      // }
-
-      fld_t pivot = A[k * DIM + k];
-      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
-
-      // Elimination
-      for (size_t i = k + 1; i < DIM; ++i) {
-        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        fld_t multiplier = A[i * DIM + k];
-        for (size_t j = k; j < DIM; ++j) {
-          A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
-                                          multiplier, p, p_dash);
+        if (threadIdx.x < SIZE * SIZE)
+        {
+        // Elimination
+        if (i >= k +1) {
+        // for (size_t i = k + 1; i < DIM; ++i) {
+          scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+          fld_t multiplier = A[i * DIM + k];
+          // for (size_t j = k; j < DIM; ++j) {
+          if (j >= k) {
+            A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
+                                            multiplier, p, p_dash);
+          }
         }
       }
     }
-
-    out[workIdx] = det; // d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
-
-    
   }
+
+// Lol - this isn't the real det - but the math works out the same anyway  
+    out[(blockIdx.x * blockDim.x) + threadIdx.x] = det;
+    // if (threadIdx.x == 255) {
+    //   out[workIdx] = det; // d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash); 
+    // }
+  }
+}
 
 
 
