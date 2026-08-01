@@ -73,7 +73,7 @@ CUDA_OBJS := $(patsubst $(SRC_DIR)/%.cu,$(OBJ_DIR)/%.o,$(CUDA_SRCS))
 OBJS += $(CUDA_OBJS)
 endif
 
-MAIN_FILES := oeis.c nnecklaces.c nprefix.c test_snapshot_gpu.c
+MAIN_FILES := oeis.c nnecklaces.c nprefix.c test_snapshot_gpu.c det_harness.c
 MAIN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(MAIN_FILES))
 
 UTIL_OBJS := $(filter-out $(MAIN_OBJS),$(OBJS))

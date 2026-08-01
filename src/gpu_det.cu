@@ -43,6 +43,7 @@ struct gpu_kernel_ctx_t {
 // Helper function for jk_pos on device
 template <size_t M> __device__ inline size_t d_jk_pos(size_t j, size_t k) {
   int result = k - j;
+  // Could remove this if?
   return result >= 0 ? (size_t)result : result + M;
 }
 
@@ -95,10 +96,10 @@ __device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
   return s0;
 }
 
-__device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
-  fld_t inv = d_extended_euclidean(x, p);
-  return d_mont_mul(r3, inv, p, p_dash);
-}
+// __device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
+//   fld_t inv = d_extended_euclidean(x, p);
+//   return d_mont_mul(r3, inv, p, p_dash);
+// }
 
 __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
                                        fld_t p, fld_t p_dash) {
@@ -140,377 +141,417 @@ __device__ inline fld_t d_jk_sums_pow(const fld_t *d_jk_sums_pow_upper_M,
                     d_jk_sums_pow_lower_M[lower_index_full], p, p_dash);
 }
 
-// Device-side multinomial coefficient computation
-template <size_t M>
-__device__ inline fld_t
-d_multinomial_mod_p(const fld_t *d_fact_M, const fld_t *d_fact_inv_M,
-                    const mss_el_t *vec, uint64_t n_args, fld_t p,
-                    fld_t p_dash) {
-  fld_t coeff = d_fact_M[n_args - 1];
-  for (size_t i = 0; i < M; ++i) {
-    coeff = d_mont_mul(coeff, d_fact_inv_M[vec[i]], p, p_dash);
-  }
-  return coeff;
-}
+// // Device-side multinomial coefficient computation
+// template <size_t M>
+// __device__ inline fld_t
+// d_multinomial_mod_p(const fld_t *d_fact_M, const fld_t *d_fact_inv_M,
+//                     const mss_el_t *vec, uint64_t n_args, fld_t p,
+//                     fld_t p_dash) {
+//   fld_t coeff = d_fact_M[n_args - 1];
+//   for (size_t i = 0; i < M; ++i) {
+//     coeff = d_mont_mul(coeff, d_fact_inv_M[vec[i]], p, p_dash);
+//   }
+//   return coeff;
+// }
 
-// Device-side f_fst_trm computation
-template <size_t M, size_t M_HALF>
-__device__ inline fld_t d_f_fst_trm(const mss_el_t *vec, const fld_t *d_rs,
-                                    const fld_t *d_jk_sums_pow_upper_M,
-                                    const fld_t *d_jk_sums_pow_lower_M, fld_t p,
-                                    fld_t p_dash) {
-  uint16_t e = 0;
-  // assert(m <= M);
-  uint16_t pows[M];
-  for (size_t i = 0; i < M; ++i) {
-    pows[i] = 0;
-  }
+// // Device-side f_fst_trm computation
+// template <size_t M, size_t M_HALF>
+// __device__ inline fld_t d_f_fst_trm(const mss_el_t *vec, const fld_t *d_rs,
+//                                     const fld_t *d_jk_sums_pow_upper_M,
+//                                     const fld_t *d_jk_sums_pow_lower_M, fld_t p,
+//                                     fld_t p_dash) {
+//   uint16_t e = 0;
+//   // assert(m <= M);
+//   uint16_t pows[M];
+//   for (size_t i = 0; i < M; ++i) {
+//     pows[i] = 0;
+//   }
 
-  for (size_t a = 0; a < M; ++a) {
-    uint16_t ca = vec[a];
-    if (!ca)
-      continue;
+//   for (size_t a = 0; a < M; ++a) {
+//     uint16_t ca = vec[a];
+//     if (!ca)
+//       continue;
 
-    e += (ca * (ca - 1));
+//     e += (ca * (ca - 1));
 
-    for (size_t b = a + 1; b < M; ++b) {
-      uint16_t cb = vec[b];
-      uint16_t diff = b - a;
-      pows[diff] += ca * cb;
-    }
-  }
+//     for (size_t b = a + 1; b < M; ++b) {
+//       uint16_t cb = vec[b];
+//       uint16_t diff = b - a;
+//       pows[diff] += ca * cb;
+//     }
+//   }
 
-  fld_t acc = d_fast_pow_2(d_rs, e / 2, p, p_dash);
+//   fld_t acc = d_fast_pow_2(d_rs, e / 2, p, p_dash);
 
-  for (size_t i = 1; i < M_HALF; i++) {
-    fld_t pow_val =
-        d_jk_sums_pow<M_HALF>(d_jk_sums_pow_upper_M, d_jk_sums_pow_lower_M, i,
-                              pows[i] + pows[M - i], p, p_dash);
-    acc = d_mont_mul(acc, pow_val, p, p_dash);
-  }
+//   for (size_t i = 1; i < M_HALF; i++) {
+//     fld_t pow_val =
+//         d_jk_sums_pow<M_HALF>(d_jk_sums_pow_upper_M, d_jk_sums_pow_lower_M, i,
+//                               pows[i] + pows[M - i], p, p_dash);
+//     acc = d_mont_mul(acc, pow_val, p, p_dash);
+//   }
 
-  return acc;
-}
+//   return acc;
+// }
 
-// Build matrix for f_snd_trm on GPU, return dimension and prod_M
-template <size_t M, size_t DIM>
-__device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
-                                           const fld_t *jk_prod_M,
-                                           const fld_t *nat_M,
-                                           const fld_t *nat_inv_M, fld_t *A,
-                                           fld_t p, fld_t p_dash, fld_t r) {
-  static_assert((uint8_t)-1 > M);
-  uint8_t typ[M];
-  size_t r_cnt = 0;
-  for (size_t i = 0; i < M; ++i) {
-    if (c[i]) {
-      typ[r_cnt] = i;
-      ++r_cnt;
-    }
-  }
+// // Build matrix for f_snd_trm on GPU, return dimension and prod_M
+// template <size_t M, size_t DIM>
+// __device__ size_t d_f_snd_trm_build_matrix(const mss_el_t *c,
+//                                            const fld_t *jk_prod_M,
+//                                            const fld_t *nat_M,
+//                                            const fld_t *nat_inv_M, fld_t *A,
+//                                            fld_t p, fld_t p_dash, fld_t r) {
+//   static_assert((uint8_t)-1 > M);
+//   uint8_t typ[M];
+//   size_t r_cnt = 0;
+//   for (size_t i = 0; i < M; ++i) {
+//     if (c[i]) {
+//       typ[r_cnt] = i;
+//       ++r_cnt;
+//     }
+//   }
 
-  fld_t prod_M = r;
+//   fld_t prod_M = r;
 
-  for (size_t a = 0; a < r_cnt; ++a) {
-    uint8_t i = typ[a];
-    if (c[i] == 1)
-      continue;
+//   for (size_t a = 0; a < r_cnt; ++a) {
+//     uint8_t i = typ[a];
+//     if (c[i] == 1)
+//       continue;
 
-    fld_t sum = 0;
-    for (size_t b = 0; b < r_cnt; ++b) {
-      uint8_t j = typ[b];
-      fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
-      sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], W, p, p_dash), p);
-    }
+//     fld_t sum = 0;
+//     for (size_t b = 0; b < r_cnt; ++b) {
+//       uint8_t j = typ[b];
+//       fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
+//       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], W, p, p_dash), p);
+//     }
 
-    prod_M = d_mont_pow(sum, c[i] - 1, prod_M, p, p_dash);
-  }
+//     prod_M = d_mont_pow(sum, c[i] - 1, prod_M, p, p_dash);
+//   }
 
-  prod_M = d_mont_mul(prod_M, nat_inv_M[c[0]], p, p_dash);
+//   prod_M = d_mont_mul(prod_M, nat_inv_M[c[0]], p, p_dash);
 
-  if constexpr (DIM == 0) {
-    return prod_M;
-  } else {
-    for (size_t a = 1; a <= DIM; ++a) {
-      uint8_t i = typ[a];
-      fld_t W_del = jk_prod_M[M - i];
-      fld_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
+//   if constexpr (DIM == 0) {
+//     return prod_M;
+//   } else {
+//     for (size_t a = 1; a <= DIM; ++a) {
+//       uint8_t i = typ[a];
+//       fld_t W_del = jk_prod_M[M - i];
+//       fld_t diag = d_mont_mul(nat_M[c[0]], W_del, p, p_dash);
 
-      for (size_t b = 1; b < r_cnt; ++b) {
-        uint8_t j = typ[b];
-        if (j == i)
-          continue;
+//       for (size_t b = 1; b < r_cnt; ++b) {
+//         uint8_t j = typ[b];
+//         if (j == i)
+//           continue;
 
-        fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
-        fld_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
-        A[(a - 1) * DIM + (b - 1)] = p - v;
-        diag = d_add_mod(diag, v, p);
-      }
+//         fld_t W = jk_prod_M[d_jk_pos<M>(i, j)];
+//         fld_t v = d_mont_mul(nat_M[c[j]], W, p, p_dash);
+//         A[(a - 1) * DIM + (b - 1)] = p - v;
+//         diag = d_add_mod(diag, v, p);
+//       }
 
-      A[(a - 1) * DIM + (a - 1)] = diag;
-    }
-  }
+//       A[(a - 1) * DIM + (a - 1)] = diag;
+//     }
+//   }
 
-  return prod_M;
-}
+//   return prod_M;
+// }
 
-// Build matrix for jack_snd_trm on GPU
-template <size_t M, size_t DIM>
-__device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
-                                              const fld_t *jk_prod_M,
-                                              const fld_t *nat_M, fld_t *A,
-                                              fld_t p, fld_t p_dash, fld_t r) {
-  static_assert((uint8_t)-1 > M);
-  uint8_t typ[M];
-  size_t dim = 0;
-  for (size_t i = 0; i < M; ++i) {
-    if (c[i]) {
-      typ[dim] = i;
-      ++dim;
-    }
-  }
+// // Build matrix for jack_snd_trm on GPU
+// template <size_t M, size_t DIM>
+// __device__ size_t d_jack_snd_trm_build_matrix(const mss_el_t *c,
+//                                               const fld_t *jk_prod_M,
+//                                               const fld_t *nat_M, fld_t *A,
+//                                               fld_t p, fld_t p_dash, fld_t r) {
+//   static_assert((uint8_t)-1 > M);
+//   // uint8_t typ[M];
+//   size_t dim = 0;
+//   // for (size_t i = 0; i < M; ++i) {
+//   //   if (c[i]) {
+//   //     typ[dim] = i;
+//   //     ++dim;
+//   //   }
+//   // }
 
-  fld_t prod_M = r;
+//   fld_t prod_M = r;
 
-  for (size_t a = 0; a < DIM; ++a) {
-    uint8_t i = typ[a];
-    fld_t sum = r;
-    for (size_t b = 0; b < DIM; ++b) {
-      uint8_t j = typ[b];
-      fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
-      sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], w, p, p_dash), p);
-    }
-    prod_M = d_mont_pow(sum, c[i] - 1, prod_M, p, p_dash);
-  }
+//   for (size_t a = 0; a < DIM; ++a) {
+//     uint8_t i = typ[a];
+//     fld_t sum = r;
+//     for (size_t b = 0; b < DIM; ++b) {
+//       uint8_t j = typ[b];
+//       fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
+//       sum = d_add_mod(sum, d_mont_mul(nat_M[c[j]], w, p, p_dash), p);
+//     }
+//     prod_M = d_mont_pow(sum, c[i] - 1, prod_M, p, p_dash);
+//   }
 
-  if constexpr (DIM <= 1) {
-    return prod_M;
-  } else {
-    for (size_t a = 0; a < DIM; ++a) {
-      uint8_t i = typ[a];
-      fld_t diag = r;
+//   if constexpr (DIM <= 1) {
+//     return prod_M;
+//   } else {
+//     for (size_t a = 0; a < DIM; ++a) {
+//       uint8_t i = typ[a];
+//       fld_t diag = r;
 
-      for (size_t b = 0; b < DIM; ++b) {
-        uint8_t j = typ[b];
-        if (j == i)
-          continue;
+//       for (size_t b = 0; b < DIM; ++b) {
+//         uint8_t j = typ[b];
+//         if (j == i)
+//           continue;
 
-        fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
-        fld_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
-        A[(a)*DIM + (b)] = p - v;
-        diag = d_add_mod(diag, v, p);
-      }
+//         fld_t w = jk_prod_M[d_jk_pos<M>(i, j)];
+//         fld_t v = d_mont_mul(nat_M[c[j]], w, p, p_dash);
+//         A[(a)*DIM + (b)] = p - v;
+//         diag = d_add_mod(diag, v, p);
+//       }
 
-      A[(a)*DIM + (a)] = diag;
-    }
+//       A[(a)*DIM + (a)] = diag;
+//     }
 
-    return prod_M;
-  }
-}
+//     return prod_M;
+//   }
+// }
 
-// Compute f_snd_trm for David mode: build matrix and compute determinant
-template <size_t M, size_t DIM>
-__device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec,
-                                           const fld_t *d_jk_prod_M,
-                                           const fld_t *d_nat_M,
-                                           const fld_t *d_nat_inv_M, fld_t p,
-                                           fld_t p_dash, fld_t r, fld_t r3) {
-  if constexpr (DIM == 0) {
-    // DIM=0: no matrix needed
-    return d_f_snd_trm_build_matrix<M, DIM>(vec, d_jk_prod_M, d_nat_M,
-                                            d_nat_inv_M, NULL, p, p_dash, r);
-  } else {
-    // DIM > 0: build matrix and compute determinant
-    fld_t A[DIM * DIM];
+// // // Compute f_snd_trm for David mode: build matrix and compute determinant
+// // template <size_t M, size_t DIM>
+// // __device__ fld_t d_compute_f_snd_trm_david(const mss_el_t *vec,
+// //                                            const fld_t *d_jk_prod_M,
+// //                                            const fld_t *d_nat_M,
+// //                                            const fld_t *d_nat_inv_M, fld_t p,
+// //                                            fld_t p_dash, fld_t r, fld_t r3) {
+// //   if constexpr (DIM == 0) {
+// //     return 0;
+// //     // DIM=0: no matrix needed
+// //     // return d_f_snd_trm_build_matrix<M, DIM>(vec, d_jk_prod_M, d_nat_M,
+// //     //                                         d_nat_inv_M, NULL, p, p_dash, r);
+// //   } else {
+// //     // DIM > 0: build matrix and compute determinant
+// //     fld_t A[DIM * DIM];
 
-    fld_t prod_M = d_f_snd_trm_build_matrix<M, DIM>(
-        vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A, p, p_dash, r);
+// //     fld_t prod_M = 303;
 
-    // Compute determinant via Gaussian elimination
-    fld_t det = r, scaling_factor = r;
+// //     // fld_t prod_M = d_f_snd_trm_build_matrix<M, DIM>(
+// //     //     vec, d_jk_prod_M, d_nat_M, d_nat_inv_M, A, p, p_dash, r);
 
-    for (size_t k = 0; k < DIM; ++k) {
-      // Find pivot
-      size_t pivot_i = k;
-      while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
-        ++pivot_i;
+// //     // Compute determinant via Gaussian elimination
+// //     fld_t det = r, scaling_factor = r;
 
-      if (pivot_i == DIM) {
-        det = 0;
-        break;
-      }
+// //     for (size_t k = 0; k < DIM; ++k) {
+// //       // Find pivot
+// //       size_t pivot_i = k;
+// //       while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
+// //         ++pivot_i;
 
-      // Swap rows if needed
-      if (pivot_i != k) {
-        for (size_t j = 0; j < DIM; ++j) {
-          fld_t tmp = A[k * DIM + j];
-          A[k * DIM + j] = A[pivot_i * DIM + j];
-          A[pivot_i * DIM + j] = tmp;
-        }
-        det = p - det;
-      }
+// //       if (pivot_i == DIM) {
+// //         det = 0;
+// //         break;
+// //       }
 
-      fld_t pivot = A[k * DIM + k];
-      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
+// //       // Swap rows if needed
+// //       if (pivot_i != k) {
+// //         for (size_t j = 0; j < DIM; ++j) {
+// //           fld_t tmp = A[k * DIM + j];
+// //           A[k * DIM + j] = A[pivot_i * DIM + j];
+// //           A[pivot_i * DIM + j] = tmp;
+// //         }
+// //         det = p - det;
+// //       }
 
-      // Elimination
-      for (size_t i = k + 1; i < DIM; ++i) {
-        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        fld_t multiplier = A[i * DIM + k];
-        for (size_t j = k; j < DIM; ++j) {
-          A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
-                                          multiplier, p, p_dash);
-        }
-      }
-    }
+// //       fld_t pivot = A[k * DIM + k];
+// //       det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
 
-    det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
+// //       // Elimination
+// //       for (size_t i = k + 1; i < DIM; ++i) {
+// //         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+// //         fld_t multiplier = A[i * DIM + k];
+// //         for (size_t j = k; j < DIM; ++j) {
+// //           A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
+// //                                           multiplier, p, p_dash);
+// //         }
+// //       }
+// //     }
 
-    return d_mont_mul(prod_M, det, p, p_dash);
-  }
-}
+// //     det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
 
-// Compute f_snd_trm for Jack mode: build matrix and compute determinant
-template <size_t M, size_t DIM>
-__device__ fld_t d_compute_f_snd_trm_jack(const mss_el_t *vec,
-                                          const fld_t *d_jk_prod_M,
-                                          const fld_t *d_nat_M, fld_t p,
-                                          fld_t p_dash, fld_t r, fld_t r3) {
-  if constexpr (DIM <= 1) {
-    // DIM <= 1: no matrix needed, builder returns 0
-    return d_jack_snd_trm_build_matrix<M, DIM>(vec, d_jk_prod_M, d_nat_M, NULL,
-                                               p, p_dash, r);
-  } else {
-    // DIM > 1: build matrix and compute determinant
-    fld_t A[DIM * DIM];
+// //     return d_mont_mul(prod_M, det, p, p_dash);
+// //   }
+// // }
 
-    fld_t prod_M = d_jack_snd_trm_build_matrix<M, DIM>(
-        vec, d_jk_prod_M, d_nat_M, A, p, p_dash, r);
+// // Compute f_snd_trm for Jack mode: build matrix and compute determinant
+// template <size_t M, size_t DIM>
+// __device__ fld_t d_compute_f_snd_trm_jack(const mss_el_t *vec,
+//                                           const fld_t *d_jk_prod_M,
+//                                           const fld_t *d_nat_M, 
+//                                           fld_t p,
+//                                           fld_t p_dash,
+//                                           fld_t r
+//                                           //fld_t r3
+//                                         ) {
+//   if constexpr (DIM <= 1) {
+//     // DIM <= 1: no matrix needed, builder returns 0
+//     return 343324;
+//     // return d_jack_snd_trm_build_matrix<M, DIM>(vec, d_jk_prod_M, d_nat_M, NULL,
+//     //                                            p, p_dash, r);
+//   } else {
+//     // DIM > 1: build matrix and compute determinant
+//     fld_t A[DIM * DIM];
 
-    // Compute determinant via Gaussian elimination
-    fld_t det = r, scaling_factor = r;
+//     fld_t prod_M = d_jack_snd_trm_build_matrix<M, DIM>(
+//         vec, d_jk_prod_M, d_nat_M, A, p, p_dash, r);
 
-    for (size_t k = 0; k < DIM; ++k) {
-      // Find pivot
-      size_t pivot_i = k;
-      while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
-        ++pivot_i;
+//     // fld_t prod_M = 435;
+//     // Compute determinant via Gaussian elimination
+//     fld_t det = r, scaling_factor = r;
 
-      if (pivot_i == DIM) {
-        det = 0;
-        break;
-      }
+//     for (size_t k = 0; k < DIM; ++k) {
+//       // Find pivot
+//       size_t pivot_i = k;
+//       while (pivot_i < DIM && A[pivot_i * DIM + k] == 0)
+//         ++pivot_i;
 
-      // Swap rows if needed
-      if (pivot_i != k) {
-        for (size_t j = 0; j < DIM; ++j) {
-          fld_t tmp = A[k * DIM + j];
-          A[k * DIM + j] = A[pivot_i * DIM + j];
-          A[pivot_i * DIM + j] = tmp;
-        }
-        det = p - det;
-      }
+//       if (pivot_i == DIM) {
+//         det = 0;
+//         break;
+//       }
 
-      fld_t pivot = A[k * DIM + k];
-      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
+//       // Swap rows if needed
+//       if (pivot_i != k) {
+//         for (size_t j = 0; j < DIM; ++j) {
+//           fld_t tmp = A[k * DIM + j];
+//           A[k * DIM + j] = A[pivot_i * DIM + j];
+//           A[pivot_i * DIM + j] = tmp;
+//         }
+//         det = p - det;
+//       }
 
-      // Elimination
-      for (size_t i = k + 1; i < DIM; ++i) {
-        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        fld_t multiplier = A[i * DIM + k];
-        for (size_t j = k; j < DIM; ++j) {
-          A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
-                                          multiplier, p, p_dash);
-        }
-      }
-    }
+//       fld_t pivot = A[k * DIM + k];
+//       det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
 
-    det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
+//       // Elimination
+//       for (size_t i = k + 1; i < DIM; ++i) {
+//         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+//         fld_t multiplier = A[i * DIM + k];
+//         for (size_t j = k; j < DIM; ++j) {
+//           A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
+//                                           multiplier, p, p_dash);
+//         }
+//       }
+//     }
 
-    return d_mont_mul(prod_M, det, p, p_dash);
-  }
-}
+//     // det = d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
 
-// Comprehensive kernel: computes full david() or jack() result on GPU
-// Each thread processes one coefficient vector and produces final result
-template <size_t M, size_t M_HALF, size_t DIM>
-__global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
-                                const gpu_kernel_ctx_t *ctx, fld_t *results) {
-  size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
-  if (vec_idx >= n_vecs)
-    return;
+//     return d_mont_mul(prod_M, det, p, p_dash);
+//   }
+// }
 
-  // Load context values into registers
-  const fld_t p = ctx->p;
-  const fld_t p_dash = ctx->p_dash;
-  const fld_t r = ctx->r;
-  const fld_t r3 = ctx->r3;
-  const uint64_t n = ctx->n;
-  const uint64_t n_args = ctx->n_args;
-  const bool is_jack_mode = ctx->is_jack_mode;
+// #define WARP_SIZE 32
 
-  const fld_t *d_jk_prod_M = ctx->d_jk_prod_M;
-  const fld_t *d_nat_M = ctx->d_nat_M;
-  const fld_t *d_nat_inv_M = ctx->d_nat_inv_M;
-  const fld_t *d_ws_M = ctx->d_ws_M;
-  const fld_t *d_jk_sums_pow_lower_M = ctx->d_jk_sums_pow_lower_M;
-  const fld_t *d_jk_sums_pow_upper_M = ctx->d_jk_sums_pow_upper_M;
-  const fld_t *d_rs = ctx->d_rs;
-  const fld_t *d_fact_M = ctx->d_fact_M;
-  const fld_t *d_fact_inv_M = ctx->d_fact_inv_M;
+// // Comprehensive kernel: computes full david() or jack() result on GPU
+// // Each thread processes one coefficient vector and produces final result
+// template <size_t M, size_t M_HALF, size_t DIM>
+// __global__ void vec_full_kernel(const mss_el_t *vecs, size_t n_vecs,
+//                                 const gpu_kernel_ctx_t *ctx, fld_t *results) {
+// // Should assert at least 2 blocks
+//   size_t vec_idx = blockIdx.x * blockDim.x + threadIdx.x;
+//   if (vec_idx >= n_vecs)
+//     return;
 
-  const mss_el_t *vec = &vecs[vec_idx * M];
+  
 
-  // Step 1: Compute f_fst_trm
-  fld_t f_fst_result = d_f_fst_trm<M, M_HALF>(vec, d_rs, d_jk_sums_pow_upper_M,
-                                              d_jk_sums_pow_lower_M, p, p_dash);
+//   // Load context values into registers
+//   const fld_t p = ctx->p;
+//   const fld_t p_dash = ctx->p_dash;
+//   const fld_t r = ctx->r;
+//   // const fld_t r3 = ctx->r3;
+//   // const uint64_t n = ctx->n;
+//   // const uint64_t n_args = ctx->n_args;
+//   // const bool is_jack_mode = ctx->is_jack_mode;
 
-  // Step 2: Compute f_snd_trm (build matrix + compute determinant)
-  fld_t f_snd_result =
-      is_jack_mode
-          ? d_compute_f_snd_trm_jack<M, DIM + 1>(vec, d_jk_prod_M, d_nat_M, p,
-                                                 p_dash, r, r3)
-          : d_compute_f_snd_trm_david<M, DIM>(vec, d_jk_prod_M, d_nat_M,
-                                              d_nat_inv_M, p, p_dash, r, r3);
+//   __shared__ fld_t d_jk_prod_M[WARP_SIZE];
+//   __shared__ fld_t d_nat_M[WARP_SIZE * 2];
 
-  // Step 3: Multiply f_fst_result and f_snd_result to get f_0
-  fld_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
+//   // 256 threads for block so this does get it
+//   if (threadIdx.x < M*2+1+1)
+//   {
 
-  // Step 4: Compute multinomial coefficient
-  fld_t coeff_baseline =
-      d_multinomial_mod_p<M>(d_fact_M, d_fact_inv_M, vec, n_args, p, p_dash);
+//     d_nat_M[threadIdx.x] = ctx->d_nat_M[threadIdx.x];
+//   }
 
-  // Step 5: Loop over rotations (david or jack)
-  fld_t ret = 0;
-  for (size_t r_idx = 0; r_idx < M; ++r_idx) {
-    if (vec[r_idx] == 0)
-      continue;
+//   if (threadIdx.x >= WARP_SIZE *2 && threadIdx.x < WARP_SIZE * 2 + M)
+//   {
+//     d_jk_prod_M[threadIdx.x] = ctx->d_jk_prod_M[threadIdx.x];
+//   }
 
-    fld_t coeff = d_mont_mul(coeff_baseline, d_nat_M[vec[r_idx]], p, p_dash);
+//   __syncthreads();
 
-    fld_t f_n;
-    if (is_jack_mode) {
-      // Jack mode
-      f_n = d_mont_mul(coeff, f_0, p, p_dash);
-    } else {
-      // David mode
-      size_t idx = (2 * r_idx) % M;
-      f_n = d_mont_mul(coeff,
-                       d_mont_mul(f_0, d_ws_M[idx ? M - idx : 0], p, p_dash), p,
-                       p_dash);
-    }
+//   // const fld_t *d_jk_prod_M = ctx->d_jk_prod_M;
+//   // const fld_t *d_nat_M = ctx->d_nat_M;
 
-    ret = d_add_mod(ret, f_n, p);
-  }
+//   // const fld_t *d_nat_inv_M = ctx->d_nat_inv_M;
+//   // const fld_t *d_ws_M = ctx->d_ws_M;
+//   // const fld_t *d_jk_sums_pow_lower_M = ctx->d_jk_sums_pow_lower_M;
+//   // const fld_t *d_jk_sums_pow_upper_M = ctx->d_jk_sums_pow_upper_M;
+//   // const fld_t *d_rs = ctx->d_rs;
+//   // const fld_t *d_fact_M = ctx->d_fact_M;
+//   // const fld_t *d_fact_inv_M = ctx->d_fact_inv_M;
 
-  // Step 6: Apply final scaling for jack mode
-  if (is_jack_mode) {
-    ret = d_mont_mul(ret, d_nat_M[n - 1], p, p_dash);
-    ret = d_mont_mul(ret, d_nat_M[n - 1], p, p_dash);
-  }
+//   const mss_el_t *vec = &vecs[vec_idx * M];
 
-  results[vec_idx] = ret;
-}
+//   // // Step 1: Compute f_fst_trm
+//   // fld_t f_fst_result = d_f_fst_trm<M, M_HALF>(vec, d_rs, d_jk_sums_pow_upper_M,
+//   //                                             d_jk_sums_pow_lower_M, p, p_dash);
+//   fld_t f_snd_result = 343;
+
+//   // for (int i = 0; i < 256; i++)
+//   // {
+//   // Step 2: Compute f_snd_trm (build matrix + compute determinant)
+//   f_snd_result =
+//       // is_jack_mode
+//       //     ? 
+//           d_compute_f_snd_trm_jack<M, DIM + 1>(vec, d_jk_prod_M, d_nat_M,
+//              p,
+//                                                  p_dash, r
+//                                                  //, r3
+//                                                 );
+//           // : d_compute_f_snd_trm_david<M, DIM>(vec, d_jk_prod_M, d_nat_M,
+//           //                                     d_nat_inv_M, p, p_dash, r, r3);
+//                                               // }
+//   // // Step 3: Multiply f_fst_result and f_snd_result to get f_0
+//   // fld_t f_0 = d_mont_mul(f_fst_result, f_snd_result, p, p_dash);
+//   // fld_t f_0 = f_snd_result;
+
+//   // // Step 4: Compute multinomial coefficient
+//   // fld_t coeff_baseline =
+//   //     d_multinomial_mod_p<M>(d_fact_M, d_fact_inv_M, vec, n_args, p, p_dash);
+
+//   // Step 5: Loop over rotations (david or jack)
+//   // fld_t ret = 0;
+//   // for (size_t r_idx = 0; r_idx < M; ++r_idx) {
+//     // if (vec[r_idx] == 0)
+//     //   continue;
+
+//     // fld_t coeff = d_mont_mul(coeff_baseline, d_nat_M[vec[r_idx]], p, p_dash);
+
+//     // fld_t f_n;
+//     // // if (is_jack_mode) {
+//     // //   // Jack mode
+//     //   f_n = d_mont_mul(coeff, f_0, p, p_dash);
+//     // } else {
+//     //   // David mode
+//     //   size_t idx = (2 * r_idx) % M;
+//     //   f_n = d_mont_mul(coeff,
+//     //                    d_mont_mul(f_0, d_ws_M[idx ? M - idx : 0], p, p_dash), p,
+//     //                    p_dash);
+//     // }
+
+//     // ret = ;
+  
+
+//   // // Step 6: Apply final scaling for jack mode
+//   // if (is_jack_mode) {
+//   //   ret = d_mont_mul(ret, d_nat_M[n - 1], p, p_dash);
+//   //   ret = d_mont_mul(ret, d_nat_M[n - 1], p, p_dash);
+//   // }
+
+//   results[vec_idx] = f_snd_result;
+// }
 
 bool gpu_available(void) {
   int device_count = 0;
@@ -729,656 +770,126 @@ void vec_batch_add_bulk(vec_batch_t *batch, const mss_el_t *vecs,
   batch->count = count;
 }
 
-#define LAUNCH_KERNEL(M, DIM, stream, count)                                   \
-  vec_full_kernel<M, (M + 1) / 2, DIM><<<num_blocks, block_size, 0, stream>>>( \
-      batch->d_vecs, (count), batch->ctx->d_ctx, batch->d_results)
+// #define LAUNCH_KERNEL(M, DIM, stream, count)                                   \
+//   vec_full_kernel<M, (M + 1) / 2, DIM><<<num_blocks, block_size, 0, stream>>>( \
+//       batch->d_vecs, (count), batch->ctx->d_ctx, batch->d_results)
 
 // Launch async GPU compute (non-blocking)
 void vec_batch_compute_async(vec_batch_t *batch, uint8_t vec_class,
                              batch_cb_t done, void *ud) {
-  if (batch->count == 0)
-    return;
+                              return;}
+//   // if (batch->count == 0)
+//   //   return;
 
-  int block_size = 256;
-  size_t m = batch->ctx->m;
+//   // On 5080
+//   // Max blocks = 16 / CM
+//   // Max 128 threads / block
+//   // max 48 warps (1536 threads) per SM
+//   // 84 GMs
+//   // 4 warps of concurrent execution
+//   //
 
-  cudaStream_t stream = batch->stream;
+//   int block_size = 256;
+//   size_t m = batch->ctx->m;
 
-  // Async copy H2D for this sub-batch
-  CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs, batch->h_vecs,
-                             batch->count * m * sizeof(mss_el_t),
-                             cudaMemcpyHostToDevice, stream));
+//   cudaStream_t stream = batch->stream;
 
-  int num_blocks = (batch->count + block_size - 1) / block_size;
+//   for (int i = 0; i < 32; i++)
+//   {
+//   // Async copy H2D for this sub-batch
+//   CUDA_CHECK(cudaMemcpyAsync(batch->d_vecs, batch->h_vecs,
+//                              batch->count * m * sizeof(mss_el_t),
+//                              cudaMemcpyHostToDevice, stream));
 
-  uint8_t dim = vec_class - 1;
+//   int num_blocks = (batch->count + block_size - 1) / block_size;
 
-  switch (m) {
-  case 3:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(3, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(3, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(3, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(3, 3, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 5:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(5, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(5, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(5, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(5, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(5, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(5, 5, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 7:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(7, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(7, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(7, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(7, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(7, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(7, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(7, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(7, 7, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 9:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(9, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(9, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(9, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(9, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(9, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(9, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(9, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(9, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(9, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(9, 9, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 11:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(11, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(11, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(11, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(11, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(11, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(11, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(11, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(11, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(11, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(11, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(11, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(11, 11, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 13:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(13, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(13, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(13, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(13, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(13, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(13, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(13, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(13, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(13, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(13, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(13, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(13, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(13, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(13, 13, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 15:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(15, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(15, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(15, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(15, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(15, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(15, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(15, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(15, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(15, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(15, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(15, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(15, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(15, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(15, 13, stream, batch->count);
-      break;
-    case 14:
-      LAUNCH_KERNEL(15, 14, stream, batch->count);
-      break;
-    case 15:
-      LAUNCH_KERNEL(15, 15, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 17:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(17, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(17, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(17, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(17, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(17, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(17, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(17, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(17, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(17, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(17, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(17, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(17, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(17, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(17, 13, stream, batch->count);
-      break;
-    case 14:
-      LAUNCH_KERNEL(17, 14, stream, batch->count);
-      break;
-    case 15:
-      LAUNCH_KERNEL(17, 15, stream, batch->count);
-      break;
-    case 16:
-      LAUNCH_KERNEL(17, 16, stream, batch->count);
-      break;
-    case 17:
-      LAUNCH_KERNEL(17, 17, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 19:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(19, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(19, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(19, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(19, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(19, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(19, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(19, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(19, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(19, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(19, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(19, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(19, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(19, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(19, 13, stream, batch->count);
-      break;
-    case 14:
-      LAUNCH_KERNEL(19, 14, stream, batch->count);
-      break;
-    case 15:
-      LAUNCH_KERNEL(19, 15, stream, batch->count);
-      break;
-    case 16:
-      LAUNCH_KERNEL(19, 16, stream, batch->count);
-      break;
-    case 17:
-      LAUNCH_KERNEL(19, 17, stream, batch->count);
-      break;
-    case 18:
-      LAUNCH_KERNEL(19, 18, stream, batch->count);
-      break;
-    case 19:
-      LAUNCH_KERNEL(19, 19, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 21:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(21, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(21, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(21, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(21, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(21, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(21, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(21, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(21, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(21, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(21, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(21, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(21, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(21, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(21, 13, stream, batch->count);
-      break;
-    case 14:
-      LAUNCH_KERNEL(21, 14, stream, batch->count);
-      break;
-    case 15:
-      LAUNCH_KERNEL(21, 15, stream, batch->count);
-      break;
-    case 16:
-      LAUNCH_KERNEL(21, 16, stream, batch->count);
-      break;
-    case 17:
-      LAUNCH_KERNEL(21, 17, stream, batch->count);
-      break;
-    case 18:
-      LAUNCH_KERNEL(21, 18, stream, batch->count);
-      break;
-    case 19:
-      LAUNCH_KERNEL(21, 19, stream, batch->count);
-      break;
-    case 20:
-      LAUNCH_KERNEL(21, 20, stream, batch->count);
-      break;
-    case 21:
-      LAUNCH_KERNEL(21, 21, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 23:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(23, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(23, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(23, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(23, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(23, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(23, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(23, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(23, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(23, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(23, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(23, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(23, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(23, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(23, 13, stream, batch->count);
-      break;
-    case 14:
-      LAUNCH_KERNEL(23, 14, stream, batch->count);
-      break;
-    case 15:
-      LAUNCH_KERNEL(23, 15, stream, batch->count);
-      break;
-    case 16:
-      LAUNCH_KERNEL(23, 16, stream, batch->count);
-      break;
-    case 17:
-      LAUNCH_KERNEL(23, 17, stream, batch->count);
-      break;
-    case 18:
-      LAUNCH_KERNEL(23, 18, stream, batch->count);
-      break;
-    case 19:
-      LAUNCH_KERNEL(23, 19, stream, batch->count);
-      break;
-    case 20:
-      LAUNCH_KERNEL(23, 20, stream, batch->count);
-      break;
-    case 21:
-      LAUNCH_KERNEL(23, 21, stream, batch->count);
-      break;
-    case 22:
-      LAUNCH_KERNEL(23, 22, stream, batch->count);
-      break;
-    case 23:
-      LAUNCH_KERNEL(23, 23, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  case 25:
-    switch (dim) {
-    case 0:
-      LAUNCH_KERNEL(25, 0, stream, batch->count);
-      break;
-    case 1:
-      LAUNCH_KERNEL(25, 1, stream, batch->count);
-      break;
-    case 2:
-      LAUNCH_KERNEL(25, 2, stream, batch->count);
-      break;
-    case 3:
-      LAUNCH_KERNEL(25, 3, stream, batch->count);
-      break;
-    case 4:
-      LAUNCH_KERNEL(25, 4, stream, batch->count);
-      break;
-    case 5:
-      LAUNCH_KERNEL(25, 5, stream, batch->count);
-      break;
-    case 6:
-      LAUNCH_KERNEL(25, 6, stream, batch->count);
-      break;
-    case 7:
-      LAUNCH_KERNEL(25, 7, stream, batch->count);
-      break;
-    case 8:
-      LAUNCH_KERNEL(25, 8, stream, batch->count);
-      break;
-    case 9:
-      LAUNCH_KERNEL(25, 9, stream, batch->count);
-      break;
-    case 10:
-      LAUNCH_KERNEL(25, 10, stream, batch->count);
-      break;
-    case 11:
-      LAUNCH_KERNEL(25, 11, stream, batch->count);
-      break;
-    case 12:
-      LAUNCH_KERNEL(25, 12, stream, batch->count);
-      break;
-    case 13:
-      LAUNCH_KERNEL(25, 13, stream, batch->count);
-      break;
-    case 14:
-      LAUNCH_KERNEL(25, 14, stream, batch->count);
-      break;
-    case 15:
-      LAUNCH_KERNEL(25, 15, stream, batch->count);
-      break;
-    case 16:
-      LAUNCH_KERNEL(25, 16, stream, batch->count);
-      break;
-    case 17:
-      LAUNCH_KERNEL(25, 17, stream, batch->count);
-      break;
-    case 18:
-      LAUNCH_KERNEL(25, 18, stream, batch->count);
-      break;
-    case 19:
-      LAUNCH_KERNEL(25, 19, stream, batch->count);
-      break;
-    case 20:
-      LAUNCH_KERNEL(25, 20, stream, batch->count);
-      break;
-    case 21:
-      LAUNCH_KERNEL(25, 21, stream, batch->count);
-      break;
-    case 22:
-      LAUNCH_KERNEL(25, 22, stream, batch->count);
-      break;
-    case 23:
-      LAUNCH_KERNEL(25, 23, stream, batch->count);
-      break;
-    case 24:
-      LAUNCH_KERNEL(25, 24, stream, batch->count);
-      break;
-    case 25:
-      LAUNCH_KERNEL(25, 25, stream, batch->count);
-      break;
-    default:
-      assert(false);
-    }
-    break;
-  default:
-    printf("\nm=%lu\n", m);
-    assert("unsupported m" && 0);
-  }
+//   uint8_t dim = vec_class - 1;
 
-  CUDA_CHECK(cudaGetLastError());
+//   switch (m) {
+//   case 19:
+//     switch (dim) {
+//     case 0:
+//       LAUNCH_KERNEL(19, 0, stream, batch->count);
+//       break;
+//     case 1:
+//       LAUNCH_KERNEL(19, 1, stream, batch->count);
+//       break;
+//     case 2:
+//       LAUNCH_KERNEL(19, 2, stream, batch->count);
+//       break;
+//     case 3:
+//       LAUNCH_KERNEL(19, 3, stream, batch->count);
+//       break;
+//     case 4:
+//       LAUNCH_KERNEL(19, 4, stream, batch->count);
+//       break;
+//     case 5:
+//       LAUNCH_KERNEL(19, 5, stream, batch->count);
+//       break;
+//     case 6:
+//       LAUNCH_KERNEL(19, 6, stream, batch->count);
+//       break;
+//     case 7:
+//       LAUNCH_KERNEL(19, 7, stream, batch->count);
+//       break;
+//     case 8:
+//       LAUNCH_KERNEL(19, 8, stream, batch->count);
+//       break;
+//     case 9:
+//       LAUNCH_KERNEL(19, 9, stream, batch->count);
+//       break;
+//     case 10:
+//       LAUNCH_KERNEL(19, 10, stream, batch->count);
+//       break;
+//     case 11:
+//       LAUNCH_KERNEL(19, 11, stream, batch->count);
+//       break;
+//     case 12:
+//       LAUNCH_KERNEL(19, 12, stream, batch->count);
+//       break;
+//     case 13:
+//       LAUNCH_KERNEL(19, 13, stream, batch->count);
+//       break;
+//     case 14:
+//       LAUNCH_KERNEL(19, 14, stream, batch->count);
+//       break;
+//     case 15:
+//       LAUNCH_KERNEL(19, 15, stream, batch->count);
+//       break;
+//     case 16:
+//       LAUNCH_KERNEL(19, 16, stream, batch->count);
+//       break;
+//     case 17:
+//       LAUNCH_KERNEL(19, 17, stream, batch->count);
+//       break;
+//     case 18:
+//       LAUNCH_KERNEL(19, 18, stream, batch->count);
+//       break;
+//     case 19:
+//       LAUNCH_KERNEL(19, 19, stream, batch->count);
+//       break;
+//     default:
+//       assert(false);
+//     }
+//     break;
+//   default:
+//     printf("\nm=%lu\n", m);
+//     assert("unsupported m" && 0);
+//   }
 
-  CUDA_CHECK(cudaMemcpyAsync(batch->h_results, batch->d_results,
-                             batch->count * sizeof(fld_t),
-                             cudaMemcpyDeviceToHost, stream));
+//     CUDA_CHECK(cudaMemcpyAsync(batch->h_results, batch->d_results,
+//                              batch->count * sizeof(fld_t),
+//                              cudaMemcpyDeviceToHost, stream));
+// }
 
-  CUDA_CHECK(cudaLaunchHostFunc(batch->stream, done, ud));
-}
+
+
+//   CUDA_CHECK(cudaGetLastError());
+
+
+
+//   CUDA_CHECK(cudaLaunchHostFunc(batch->stream, done, ud));
+// }
 
 fld_t vec_batch_get(const vec_batch_t *batch, size_t idx) {
   assert(idx < batch->count);
