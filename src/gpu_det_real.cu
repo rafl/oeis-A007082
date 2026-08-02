@@ -81,6 +81,7 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
 //   u_int32_t[SIZE]
 // }
 
+#define MATRIX_EL(row_idx, col_idx) (row_idx * DIM + col_idx)
 
 __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_sf,
   // TODO return scaling factors as well
@@ -110,8 +111,8 @@ __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_
     }
 
     for (size_t k = 0; k < DIM; ++k) {
-      fld_t pivot = A[k * DIM + k];
-      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
+      fld_t pivot = A[MATRIX_EL(k, k)];
+      det = d_mont_mul(det, pivot, p, p_dash);
 
       // Elimination
       if (row_idx >= k +1) {
@@ -119,10 +120,10 @@ __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_
         // Every row computing scaling factor is silly...
         // This scaling factor needs to be raise to some power...
         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-        fld_t multiplier = A[row_idx * DIM + k];
+        fld_t multiplier = A[MATRIX_EL(row_idx, k)];
         for (size_t col_idx = k; col_idx < DIM; ++col_idx) {
           if (col_idx >= k) {
-            A[row_idx * DIM + col_idx] = d_mont_mul_sub(A[row_idx * DIM + col_idx], pivot, A[k * DIM + col_idx],
+            A[MATRIX_EL(row_idx, col_idx)] = d_mont_mul_sub(A[MATRIX_EL(row_idx, col_idx)], pivot, A[MATRIX_EL(k, col_idx)],
                                             multiplier, p, p_dash);
           }
         }
