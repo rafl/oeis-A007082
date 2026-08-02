@@ -91,6 +91,7 @@ __device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
 
 
 __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out,
+  u_int32_t * out_scaling_factors,
      fld_t p,
                                            fld_t p_dash, fld_t r,
                                            fld_t r3,
@@ -99,41 +100,19 @@ __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out,
                                         ) {
 
 int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
-    // fld_t * A = data + (SIZE * SIZE) * workIdx;
 
-    if (workIdx >= num_matricies)
-    {
-        return;
-    }
-   
     // Compute determinant via Gaussian elimination
     fld_t det = r, scaling_factor = r;
 
+    // On this branch pragma unroll seems to make little difference
+    // #pragma unroll
     for (size_t k = 0; k < DIM; ++k) {
       // Find pivot
-      size_t pivot_i = k;
-      while (pivot_i < DIM && data[(pivot_i * DIM + k) * blockDim.x + threadIdx.x] == 0)
-        ++pivot_i;
-
-      if (pivot_i == DIM) {
-        det = 0;
-        break;
-      }
-
-      // // Swap rows if needed
-      // if (pivot_i != k) {
-      //   for (size_t j = 0; j < DIM; ++j) {
-      //     fld_t tmp = A[k * DIM + j];
-      //     A[k * DIM + j] = A[pivot_i * DIM + j];
-      //     A[pivot_i * DIM + j] = tmp;
-      //   }
-      //   det = p - det;
-      // }
-
       fld_t pivot = data[(k * DIM + k) * blockDim.x + threadIdx.x];
       det = d_mont_mul(det, data[(k * DIM + k) * blockDim.x + threadIdx.x], p, p_dash);
 
       // Elimination
+      // #pragma unroll
       for (size_t i = k + 1; i < DIM; ++i) {
         scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
         fld_t multiplier = data[(i * DIM + k) * blockDim.x + threadIdx.x];
@@ -145,12 +124,12 @@ int workIdx = ((blockIdx.x * blockDim.x) + threadIdx.x);
     }
 
     out[workIdx] = det; // d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash);
-
-    
+    out_scaling_factors[workIdx] = scaling_factor;
   }
 
 
-
+// best recorded time:
+// Elapsed time: 2.394943119 seconds
 void det_mod_p_gpu(u_int32_t const * values, uint32_t * results, u_int32_t n_matricies,      fld_t p,
                                            fld_t p_dash, fld_t r,
                                            fld_t r3)
@@ -165,15 +144,31 @@ void det_mod_p_gpu(u_int32_t const * values, uint32_t * results, u_int32_t n_mat
     CUDA_CHECK(cudaMemcpy(device_buffer, values, SIZE * SIZE * n_matricies * sizeof(u_int32_t), cudaMemcpyHostToDevice));
 
     u_int32_t *device_result;
+    u_int32_t *device_scaling_factor;
     CUDA_CHECK(cudaMalloc(&device_result, n_matricies * sizeof(u_int32_t)));
+    CUDA_CHECK(cudaMalloc(&device_scaling_factor, n_matricies * sizeof(u_int32_t)));
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
 
     for (int i = 0; i < 1000; i++)
     {
     // 3. Launch the kernel using the triple angle bracket execution syntax
-    det_mod_p_kernel<<<blocksPerGrid, threadsPerBlock>>>(device_buffer, device_result, p, p_dash, r, r3, n_matricies);
+    det_mod_p_kernel<<<blocksPerGrid, threadsPerBlock>>>(device_buffer, device_result, device_scaling_factor, p, p_dash, r, r3, n_matricies);
     }
 
+    //just for timing:
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    double elapsed =
+        (end.tv_sec - start.tv_sec) +
+        (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    printf("Elapsed time: %.9f seconds\n", elapsed);
+
     CUDA_CHECK(cudaMemcpy(results, device_result, n_matricies * sizeof(u_int32_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(results, device_scaling_factor, n_matricies * sizeof(u_int32_t), cudaMemcpyDeviceToHost));
 
     // Copy the result back from device to host
     // cudaMemcpy(h_c, d_c, bytes, cudaMemcpyDeviceToHost);
