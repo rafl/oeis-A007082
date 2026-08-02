@@ -167,7 +167,8 @@ __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_
 
 
 
-
+// best recorded time:
+// Elapsed time: 2.302144971 seconds
 void det_mod_p_gpu(u_int32_t const * values, uint32_t * results, u_int32_t n_matricies,      fld_t p,
                                            fld_t p_dash, fld_t r,
                                            fld_t r3)
