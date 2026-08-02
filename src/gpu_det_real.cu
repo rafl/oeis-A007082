@@ -77,6 +77,10 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
 //   return d_mont_mul(r3, inv, p, p_dash);
 // }
 
+// __device__ struct Row {
+//   u_int32_t[SIZE]
+// }
+
 
 __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_sf,
   // TODO return scaling factors as well
@@ -85,18 +89,19 @@ __global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_
                                            fld_t r3,
                                            int num_matricies
                                         
-                                        ) {
+                                        )                                         
+{
     // __shared__ int scalingFactors[SIZE * SIZE];
     // __shared__ int dets[SIZE * SIZE];
 
         // Compute determinant via Gaussian elimination
     fld_t det = r, scaling_factor = r;
-    fld_t i = threadIdx.x / DIM;
-    fld_t j = threadIdx.x % DIM;
+    fld_t row_idx = threadIdx.x / DIM;
+    // fld_t j = threadIdx.x % DIM;
 
-for (int lp = 0; lp <= 256; lp++)
-{
-    int workIdx = ((blockIdx.x * blockDim.x) + lp);
+  for (int lp = 0; lp <= SIZE; lp++)
+  {
+    int workIdx = ((blockIdx.x * blockDim.x) + (threadIdx.x / SIZE) * SIZE + lp);
     fld_t * A = data + (SIZE * SIZE) * workIdx;
     if (workIdx >= num_matricies)
     {
@@ -104,35 +109,33 @@ for (int lp = 0; lp <= 256; lp++)
         return;
     }
 
-    // Let's take this at it's absolute best and try to beat it
-    if (threadIdx.x < DIM * DIM)
-    {
-      for (size_t k = 0; k < DIM; ++k) {
-        fld_t pivot = A[k * DIM + k];
-        // Every thread computing det is silly... whatever
-        det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
+    for (size_t k = 0; k < DIM; ++k) {
+      fld_t pivot = A[k * DIM + k];
+      det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
 
-        // Elimination
-        if (i >= k +1) {
-        // for (size_t i = k + 1; i < DIM; ++i) {
-          // Every thread computing scaling factor is silly...
-          // This scaling factor needs to be raise to some power...
-          scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
-          fld_t multiplier = A[i * DIM + k];
-          // for (size_t j = k; j < DIM; ++j) {
-          if (j >= k) {
-            A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
+      // Elimination
+      if (row_idx >= k +1) {
+      // for (size_t i = k + 1; i < DIM; ++i) {
+        // Every row computing scaling factor is silly...
+        // This scaling factor needs to be raise to some power...
+        scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
+        fld_t multiplier = A[row_idx * DIM + k];
+        for (size_t col_idx = k; col_idx < DIM; ++col_idx) {
+          if (col_idx >= k) {
+            A[row_idx * DIM + col_idx] = d_mont_mul_sub(A[row_idx * DIM + col_idx], pivot, A[k * DIM + col_idx],
                                             multiplier, p, p_dash);
           }
-      }
+        }
 
-      __syncthreads();
+
+        __syncthreads();
+      }
+      if (row_idx == 0) {
+        out[workIdx] = det;
+        out_sf[workIdx] = scaling_factor;
+      }
     }
-    if (threadIdx.x == 0) {
-      out[workIdx] = det;
-      out_sf[workIdx] = scaling_factor;
-    }
-  }
+  
   }
 }
 
