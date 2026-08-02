@@ -78,7 +78,7 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
 // }
 
 
-__global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out,
+__global__ void det_mod_p_kernel(u_int32_t *data, u_int32_t* out, uint32_t* out_sf,
   // TODO return scaling factors as well
      fld_t p,
                                            fld_t p_dash, fld_t r,
@@ -104,21 +104,19 @@ for (int lp = 0; lp <= 256; lp++)
         return;
     }
 
-
-   
-
-
-    if (blockIdx.x < DIM * DIM)
+    // Let's take this at it's absolute best and try to beat it
+    if (threadIdx.x < DIM * DIM)
     {
       for (size_t k = 0; k < DIM; ++k) {
         fld_t pivot = A[k * DIM + k];
+        // Every thread computing det is silly... whatever
         det = d_mont_mul(det, A[k * DIM + k], p, p_dash);
 
-        if (threadIdx.x < SIZE * SIZE)
-        {
         // Elimination
         if (i >= k +1) {
         // for (size_t i = k + 1; i < DIM; ++i) {
+          // Every thread computing scaling factor is silly...
+          // This scaling factor needs to be raise to some power...
           scaling_factor = d_mont_mul(scaling_factor, pivot, p, p_dash);
           fld_t multiplier = A[i * DIM + k];
           // for (size_t j = k; j < DIM; ++j) {
@@ -126,18 +124,15 @@ for (int lp = 0; lp <= 256; lp++)
             A[i * DIM + j] = d_mont_mul_sub(A[i * DIM + j], pivot, A[k * DIM + j],
                                             multiplier, p, p_dash);
           }
-        }
       }
 
       __syncthreads();
     }
+    if (threadIdx.x == 0) {
+      out[workIdx] = det;
+      out_sf[workIdx] = scaling_factor;
+    }
   }
-
-// Lol - this isn't the real det - but the math works out the same anyway  
-    out[(blockIdx.x * blockDim.x) + threadIdx.x] = det;
-    // if (threadIdx.x == 255) {
-    //   out[workIdx] = det; // d_mont_mul(det, d_mont_inv(scaling_factor, r3, p, p_dash), p, p_dash); 
-    // }
   }
 }
 
@@ -157,15 +152,31 @@ void det_mod_p_gpu(u_int32_t const * values, uint32_t * results, u_int32_t n_mat
     CUDA_CHECK(cudaMemcpy(device_buffer, values, SIZE * SIZE * n_matricies * sizeof(u_int32_t), cudaMemcpyHostToDevice));
 
     u_int32_t *device_result;
+    u_int32_t *device_scaling_factor;
     CUDA_CHECK(cudaMalloc(&device_result, n_matricies * sizeof(u_int32_t)));
+    CUDA_CHECK(cudaMalloc(&device_scaling_factor, n_matricies * sizeof(u_int32_t)));
+    struct timespec start, end;
+    clock_gettime(CLOCK_MONOTONIC, &start);
 
     for (int i = 0; i < 1000; i++)
     {
     // 3. Launch the kernel using the triple angle bracket execution syntax
-    det_mod_p_kernel<<<blocksPerGrid, threadsPerBlock>>>(device_buffer, device_result, p, p_dash, r, r3, n_matricies);
+    det_mod_p_kernel<<<blocksPerGrid, threadsPerBlock>>>(device_buffer, device_result, device_scaling_factor, p, p_dash, r, r3, n_matricies);
     }
 
+    //just for timing:
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    clock_gettime(CLOCK_MONOTONIC, &end);
+
+    double elapsed =
+        (end.tv_sec - start.tv_sec) +
+        (end.tv_nsec - start.tv_nsec) / 1e9;
+
+    printf("Elapsed time: %.9f seconds\n", elapsed);
+
     CUDA_CHECK(cudaMemcpy(results, device_result, n_matricies * sizeof(u_int32_t), cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(results, device_scaling_factor, n_matricies * sizeof(u_int32_t), cudaMemcpyDeviceToHost));
 
     // Copy the result back from device to host
     // cudaMemcpy(h_c, d_c, bytes, cudaMemcpyDeviceToHost);
