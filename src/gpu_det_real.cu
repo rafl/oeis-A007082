@@ -50,32 +50,32 @@ __device__ inline fld_t d_mont_mul_sub(fld_t a1, fld_t b1, fld_t a2, fld_t b2,
 // #define fld_t u_int32_t
 #define DIM SIZE
 
-// __device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
-//   fld_t r0 = a;
-//   fld_t r1 = b;
-//   fld_t s0 = 1;
-//   fld_t s1 = 0;
-//   fld_t spare;
-//   size_t n = 0;
-//   while (r1) {
-//     fld_t q = r0 / r1;
-//     spare = r0 % r1;
-//     r0 = r1;
-//     r1 = spare;
-//     spare = s0 + q * s1;
-//     s0 = s1;
-//     s1 = spare;
-//     ++n;
-//   }
-//   if (n % 2)
-//     s0 = b - s0;
-//   return s0;
-// }
+__device__ inline fld_t d_extended_euclidean(fld_t a, fld_t b) {
+  fld_t r0 = a;
+  fld_t r1 = b;
+  fld_t s0 = 1;
+  fld_t s1 = 0;
+  fld_t spare;
+  size_t n = 0;
+  while (r1) {
+    fld_t q = r0 / r1;
+    spare = r0 % r1;
+    r0 = r1;
+    r1 = spare;
+    spare = s0 + q * s1;
+    s0 = s1;
+    s1 = spare;
+    ++n;
+  }
+  if (n % 2)
+    s0 = b - s0;
+  return s0;
+}
 
-// __device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
-//   fld_t inv = d_extended_euclidean(x, p);
-//   return d_mont_mul(r3, inv, p, p_dash);
-// }
+__device__ inline fld_t d_mont_inv(fld_t x, fld_t r3, fld_t p, fld_t p_dash) {
+  fld_t inv = d_extended_euclidean(x, p);
+  return d_mont_mul(r3, inv, p, p_dash);
+}
 
 #define WIDE_LOAD_SIZE 4
 
