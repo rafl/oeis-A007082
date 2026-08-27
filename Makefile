@@ -86,3 +86,6 @@ b135388.txt: b007082.txt b135388.hs
 
 b369820.txt: b135388.txt b369820.hs
 	runghc b369820.hs < $< > $@
+
+b284287.txt: b135388.txt b284287.hs
+	runghc b284287.hs < $< > $@
