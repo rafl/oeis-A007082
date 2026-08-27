@@ -83,3 +83,6 @@ fmt:
 
 b135388.txt: b007082.txt b135388.hs
 	runghc b135388.hs < $< > $@
+
+b369820.txt: b135388.txt b369820.hs
+	runghc b369820.hs < $< > $@
