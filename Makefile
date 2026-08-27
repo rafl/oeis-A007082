@@ -80,3 +80,6 @@ test: oeis
 
 fmt:
 	bash -c 'shopt -s globstar; clang-format -i -- src/**.c include/**.h'
+
+b135388.txt: b007082.txt b135388.hs
+	runghc b135388.hs < $< > $@
